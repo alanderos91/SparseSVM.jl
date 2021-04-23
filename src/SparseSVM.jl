@@ -1,8 +1,25 @@
 module SparseSVM
-using LinearAlgebra
+using LinearAlgebra, Random
+
+##### OBJECTIVE #####
+function eval_objective(Xb::AbstractVector, y, b, p, rho)
+  T = eltype(Xb)
+  m, n = length(y), length(b)
+  obj = zero(T)
+  for i in 1:n # rho * |P(b) - b|^2 contribution; can reduce to BLAS.axpby!
+    obj = obj + (p[i] - b[i])^2
+  end
+  obj = rho / n * obj
+  for i in 1:m # |z - X*b|^2 contribution
+    obj = obj + max(one(T) - y[i] * Xb[i], zero(T))^2 / m
+  end
+  return obj
+end
+
+eval_objective(X::AbstractMatrix, y, b, p, rho) = eval_objective(X*b, y, b, p, rho)
+##### END OBJECTIVE #####
 
 ##### PROJECTIONS ######
-
 """
 Project `x` onto sparsity set with `k` non-zero elements.
 Assumes `idx` enters as a vector of indices into `x`.
@@ -63,7 +80,6 @@ function search_partialsort!(idx, x, k)
   
   return x[idx[k+1]]
 end
-
 ##### END PROJECTIONS #####
 
 ##### MAIN DRIVER #####
@@ -97,7 +113,8 @@ end
 function annealing!(f, b, X, y, tol, k; init::Bool=true, mult=1.5, nouter=10, rho_init=1.0)
   init && randn!(b)
   rho = rho_init
-  # (obj, old, iters) = (zero(T), zero(T), 0)
+  T = eltype(X) # should be more careful here to make sure BLAS works correctly
+  (obj, old, iters) = (zero(T), zero(T), 0)
 
   # check if svd(X) is needed
   if f isa typeof(sparse_direct!)
@@ -109,7 +126,7 @@ function annealing!(f, b, X, y, tol, k; init::Bool=true, mult=1.5, nouter=10, rh
   for n in 1:nouter
     print(n,"  ")
     # solve problem for fixed rho
-    @time f(b, X, y, rho, tol, k, extras)
+    _, cur_iters, obj = @time f(b, X, y, rho, tol, k, extras)
 
     # if abs(old - obj) < tol * (old + 1)
     #   break
@@ -117,18 +134,22 @@ function annealing!(f, b, X, y, tol, k; init::Bool=true, mult=1.5, nouter=10, rh
     #   old = obj
     # end
 
+    iters += cur_iters
+
     # update according to annealing schedule
     rho = mult * rho
   end
   p = project_sparsity_set!(copy(b), collect(1:length(b)), k)
-  dist = norm(p - b)
-  print("\ndist = ", dist)
+  dist = norm(p - b) / sqrt(length(b))
+  print("\niters = ", iters)
+  print("\ndist  = ", dist)
+  print("\nobj   = ", obj)
+  print("\nTotal Time")
   copyto!(b, p)
-  return b
+  return b, iters, obj, dist
 end
 
 export annealing, annealing!
-
 ##### END MAIN DRIVER #####
 
 ##### MM ALGORITHMS #####
@@ -154,18 +175,9 @@ function sparse_steepest!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol:
   (grad, increment) = (zeros(T, n), zeros(T, n))
   (p, idx) = (copy(b), collect(1:n)) # for projection
   a = zeros(T, m)
-  Xb = zeros(T, m)
-  mul!(Xb, X, b)
+  Xb = X * b
   project_sparsity_set!(p, idx, k)
-  ### initialize objective ###
-  for i = 1:n             # rho * |P(b) - b|^2; can reduce to BLAS.axpby!
-    old = old + (p[i] - b[i])^2
-  end
-  old = rho / n * old
-  for i = 1:m             # |z - X*b|^2
-    old = old + max(one(T) - y[i] * Xb[i], zero(T))^2 / m
-  end
-  ### end initialize objective ###
+  old = eval_objective(Xb, y, b, p, rho)
   for iter = 1:1000
     iters = iters + 1
     @. grad = rho * (b - p) # penalty contribution
@@ -184,14 +196,7 @@ function sparse_steepest!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol:
       copyto!(p, b)
       project_sparsity_set!(p, idx, k)
       mul!(Xb, X, b)
-      obj = zero(T)
-      for i = 1:n             # rho * |P(b) - b|^2 contribution; can reduce to BLAS.axpby!
-        obj = obj + (p[i] - b[i])^2
-      end
-      obj = rho / n * obj
-      for i = 1:m             # |z - X*b|^2 contribution
-        obj = obj + max(one(T) - y[i] * Xb[i], zero(T))^2 / m
-      end
+      obj = eval_objective(Xb, y, b, p, rho)
       if obj < old
         break
       else
@@ -211,7 +216,7 @@ function sparse_steepest!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol:
     end  
   end
   print(iters,"  ",obj)
-  return b
+  return b, iters, obj
 end
 
 """
@@ -258,14 +263,7 @@ function sparse_direct!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T
   project_sparsity_set!(p, idx, k)
 
   ### initialize objective ###
-  for i = 1:n             # rho * |P(b) - b|^2; can reduce to BLAS.axpby!
-    old = old + (p[i] - b[i])^2
-  end
-  old = rho / n * old
-  for i = 1:m             # |z - X*b|^2
-    old = old + max(one(T) - y[i] * Xb[i], zero(T))^2 / m
-  end
-  ### end initialize objective ###
+  old = eval_objective(Xb, y, b, p, rho)
 
   for iter = 1:1000
     iters = iters + 1
@@ -286,14 +284,7 @@ function sparse_direct!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T
     copyto!(p, b)
     project_sparsity_set!(p, idx, k)
     mul!(Xb, X, b)
-    obj = zero(T)
-    for i = 1:n             # rho * |P(b) - b|^2 contribution; can reduce to BLAS.axpby!
-      obj = obj + (p[i] - b[i])^2
-    end
-    obj = rho / n * obj
-    for i = 1:m             # |z - X*b|^2 contribution
-      obj = obj + max(one(T) - y[i] * Xb[i], zero(T))^2 / m
-    end
+    obj = eval_objective(Xb, y, b, p, rho)
 #     if iter <= 10 || mod(iter, 10) == 0 
 #       println("iter = ",iter," obj = ",obj)
 #     end
@@ -304,7 +295,7 @@ function sparse_direct!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T
     end  
   end
   print(iters,"  ",obj)
-  return b
+  return b, iters, obj
 end
 
 """
@@ -329,7 +320,6 @@ function alloc_svd_and_extras(X)
 end
 
 export sparse_direct, sparse_direct!, sparse_steepest, sparse_steepest!
-
 ##### END MM ALGORITHMS #####
 
 ##### CLASSIFICATION #####
@@ -337,4 +327,5 @@ include("classifier.jl")
 
 export BinarySVMClassifier, MultiSVMClassifier, classify, trainMM
 ##### END CLASSIFICATION #####
+
 end # end module
