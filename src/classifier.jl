@@ -15,7 +15,7 @@ function classify(classifier::BinarySVMClassifier, x)
 end
 
 function trainMM(classifier::BinarySVMClassifier, f, y, X, tol, k; kwargs...)
-  annealing!(f, classifier.b, X, y, tol, k; kwargs...)
+  @time annealing!(f, classifier.b, X, y, tol, k; kwargs...)
 end
 
 # implements one-against-one approach
@@ -61,7 +61,7 @@ function trainMM(classifier::MultiSVMClassifier, f, y, X, tol, k; kwargs...)
     subset = findall(class -> class == i || class == j, y)
     y_subset = [y[index] == i ? -1.0 : 1.0 for index in subset]
     X_subset = X[subset, :]
-    @time trainMM(classifier.svm[ij], f, y_subset, X_subset, tol, k; kwargs...)
+    trainMM(classifier.svm[ij], f, y_subset, X_subset, tol, k; kwargs...)
   end
   return classifier
 end
