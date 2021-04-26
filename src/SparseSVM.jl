@@ -110,7 +110,7 @@ function annealing(f, X, y, tol, k; kwargs...)
   annealing!(f, b, X, y, tol, k; kwargs...)
 end
 
-function annealing!(f, b, X, y, tol, k; init::Bool=true, mult=1.5, nouter=10, rho_init=1.0)
+function annealing!(f, b, X, y, tol, k; init::Bool=true, mult=1.5, ninner=1000, nouter=10, rho_init=1.0)
   init && randn!(b)
   rho = rho_init
   T = eltype(X) # should be more careful here to make sure BLAS works correctly
@@ -126,7 +126,7 @@ function annealing!(f, b, X, y, tol, k; init::Bool=true, mult=1.5, nouter=10, rh
   for n in 1:nouter
     print(n,"  ")
     # solve problem for fixed rho
-    _, cur_iters, obj = @time f(b, X, y, rho, tol, k, extras)
+    _, cur_iters, obj = @time f(b, X, y, rho, tol, k, extras, ninner=ninner)
 
     # if abs(old - obj) < tol * (old + 1)
     #   break
@@ -158,9 +158,9 @@ Solve the distance-penalized SVM with fixed `rho` via steepest descent.
 
 This version allocates the coefficient vector `b`.
 """
-function sparse_steepest(X::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int) where T <: Float64
+function sparse_steepest(X::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int; kwargs...) where T <: Float64
   b = randn(T, size(X, 2))
-  sparse_steepest!(b, X, y, rho, tol, k, nothing)
+  sparse_steepest!(b, X, y, rho, tol, k, nothing; kwargs...)
 end
 
 """
@@ -168,7 +168,7 @@ Solve the distance-penalized SVM with fixed `rho` via steepest descent.
 
 This version updates the coefficient vector `b` and can be used with `annealing`.
 """
-function sparse_steepest!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, extras) where T <: Float64
+function sparse_steepest!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, extras; ninner::Int=1000) where T <: Float64
 #
   (m, n) = size(X)
   (obj, old, iters) = (zero(T), zero(T), 0)
@@ -178,7 +178,7 @@ function sparse_steepest!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol:
   Xb = X * b
   project_sparsity_set!(p, idx, k)
   old = eval_objective(Xb, y, b, p, rho)
-  for iter = 1:1000
+  for iter = 1:ninner
     iters = iters + 1
     @. grad = rho * (b - p) # penalty contribution
     for i = 1:m
@@ -224,9 +224,10 @@ Solve the distance-penalized SVM with fixed `rho` via normal equations.
 
 This version allocates the coefficient vector `b`.
 """
-function sparse_direct(X, y, rho, tol, k)
-  b = randn(T, size(X, 2))
-  sparse_direct!(b, X, y, rho, tol, k, extras)
+function sparse_direct(X, y, rho, tol, k; kwargs...)
+  b = randn(eltype(X), size(X, 2))
+  extras = alloc_svd_and_extras(X)
+  sparse_direct!(b, X, y, rho, tol, k, extras; kwargs...)
 end
 
 """
@@ -234,7 +235,7 @@ Solve the distance-penalized SVM with fixed `rho` via normal equations.
 
 This version updates the coefficient vector `b` and can be used with `annealing`.
 """
-function sparse_direct!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, extras) where T <: Float64
+function sparse_direct!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, extras; ninner::Int=1000) where T <: Float64
   (m, n) = size(X)
   (obj, old, iters) = (zero(T), zero(T), 0)
   (p, idx) = (copy(b), collect(1:n)) # for projection
@@ -243,6 +244,7 @@ function sparse_direct!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T
   U, s, V = extras.U, extras.s, extras.V
   z, d1, d2 = extras.z, extras.d1, extras.d2
   M1, M2, Mtmp = extras.M1, extras.M2, extras.Mtmp
+  b_old = extras.b_old
 
   # Constants
   for i in eachindex(s)
@@ -262,10 +264,13 @@ function sparse_direct!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T
   # initialize projection
   project_sparsity_set!(p, idx, k)
 
-  ### initialize objective ###
+  # initialize objective
   old = eval_objective(Xb, y, b, p, rho)
 
-  for iter = 1:1000
+  # initialize worker array for Nesterov acceleration
+  copyto!(b_old, b)
+
+  for iter = 1:ninner
     iters = iters + 1
     
     # update estimates
@@ -274,20 +279,30 @@ function sparse_direct!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T
       if c < 1
         z[i] = y[i]
       else
-        z[i] = c
+        z[i] = Xb[i]
       end
     end
     mul!(b, M2, p)
     mul!(b, M1, z, true, true)
+
+    # Nesterov acceleration
+    γ = (iter - 1) / (iter + 2 - 1)
+    @inbounds for i in eachindex(b)
+      xi = b[i]
+      yi = b_old[i]
+      zi = xi + γ * (xi - yi)
+      b_old[i] = xi
+      b[i] = zi
+    end
 
     # update objective
     copyto!(p, b)
     project_sparsity_set!(p, idx, k)
     mul!(Xb, X, b)
     obj = eval_objective(Xb, y, b, p, rho)
-#     if iter <= 10 || mod(iter, 10) == 0 
-#       println("iter = ",iter," obj = ",obj)
-#     end
+    # if iter <= 10 || mod(iter, 10) == 0 
+    #   println("iter = ",iter," obj = ",obj)
+    # end
     if  abs(old - obj) < tol * (old + one(T)) # norm(grad) < tol
       break
     else
@@ -316,7 +331,7 @@ function alloc_svd_and_extras(X)
   M2 = zeros(T, n, n)      # stores V * D₂ * V'
   Mtmp = zeros(T, n, n)    # for computing M₁ and M₂
 
-  extras = (U=U, s=s, V=V, z=z, d1=d1, d2=d2, M1=M1, M2=M2, Mtmp=Mtmp)
+  extras = (U=U, s=s, V=V, z=z, d1=d1, d2=d2, M1=M1, M2=M2, Mtmp=Mtmp, b_old=zeros(n))
 end
 
 export sparse_direct, sparse_direct!, sparse_steepest, sparse_steepest!
