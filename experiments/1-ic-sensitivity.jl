@@ -83,11 +83,15 @@ function run_experiment(algorithm::AlgOption, dataset, ctype=MultiSVMClassifier;
     close(results)
 end
 
+# Make sure we set up BLAS threads correctly
+using LinearAlgebra
+BLAS.set_num_threads(10)
+
 ##### Example 1: synthetic #####
 if "synthetic" in ARGS
     for opt in (SD, MM)
         run_experiment(opt, "synthetic", BinarySVMClassifier, ntrials=100, tol=1e-6,
-            ninner=10^4, nouter=20, mult=1.2)
+            ninner=10^4, nouter=50, mult=1.2)
     end
 end
 
@@ -95,7 +99,7 @@ end
 if "iris" in ARGS
     for opt in (SD, MM)
         run_experiment(opt, "iris", ntrials=100, tol=1e-6,
-            ninner=10^4, nouter=20, mult=1.2)
+            ninner=10^4, nouter=50, mult=1.2)
     end
 end
 
@@ -103,7 +107,7 @@ end
 if "letter-recognition" in ARGS
     for opt in (SD, MM)
         run_experiment(opt, "letter-recognition", ntrials=100, tol=1e-6,
-            ninner=10^4, nouter=20, mult=1.2)
+            ninner=10^4, nouter=50, mult=1.2)
     end
 end
 
@@ -111,6 +115,6 @@ end
 if "MNIST-digits" in ARGS
     for opt in (SD, MM)
         run_experiment(opt, "MNIST", ntrials=100, tol=1e-6,
-            ninner=10^4, nouter=20, mult=1.2)
+            ninner=10^4, nouter=50  , mult=1.2)
     end
 end

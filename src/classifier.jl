@@ -34,11 +34,11 @@ function MultiSVMClassifier(nfeatures::Int, class)
   svm_pair = Vector{Tuple{Int,Int}}(undef, nsvms)
   k = 1
   for j in 1:nclasses, i in j+1:nclasses
-    svm[k] = BinarySVMClassifier(nfeatures, Dict(-1 => class[i], 1 => class[j]))
+    svm[k] = BinarySVMClassifier(nfeatures, Dict(-1 => string(class[i]), 1 => string(class[j])))
     svm_pair[k] = (i, j)
     k += 1
   end
-  return MultiSVMClassifier(nclasses, svm, svm_pair, class, zeros(Int, nclasses))
+  return MultiSVMClassifier(nclasses, svm, svm_pair, string.(class), zeros(Int, nclasses))
 end
 
 function classify(classifier::MultiSVMClassifier, x)
