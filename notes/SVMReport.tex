@@ -124,7 +124,7 @@ The sparsity penalty is majorized by $\rho \|\bbeta-P_{S_{c}}(\bbeta_k)\|^2$, wh
 \begin{eqnarray*}
 L(\bbeta) & \le & \sum_{i=1}^m
 \begin{cases} (y_i - \bx_i^t \bbeta)^2 & y_i \bx_i^t \bbeta_k \le 1 \\
-(\bx_i^t \bbeta_k - \bx_i^t \bbeta^2 & y_i \bx_i^t \bbeta_k > 1 . \end{cases}
+(\bx_i^t \bbeta_k - \bx_i^t \bbeta)^2 & y_i \bx_i^t \bbeta_k > 1 . \end{cases}
 \end{eqnarray*}
 If $\bX$ is the matrix with $i$th row $\bx_i^t$ and $\by$ is the vector with $i$th component $y_i$, then the surrogate can be expressed as
 \begin{eqnarray*}
@@ -135,7 +135,7 @@ g_{\rho}(\bbeta \mid \bbeta_{k})
 \right\|^2,
 \end{eqnarray*}
 where $\bz_k$ has $i$th component $y_i$ when $y_i \bx_i^t\bbeta_k \le 1$
-and $y_i \bx_i^t\bbeta_k$ otherwise. 
+and $\bx_i^t\bbeta_k$ otherwise. 
 This formulation of the problem connects two important cases.
 A ridge penalty version requires setting $\bp_{k} = \bzero$ and $\bD_{\rho} = \begin{pmatrix} \sqrt{\rho} \bI & \bzero_{p-1} \\ \bzero_{p-1}^{t} & 0 \end{pmatrix}$.
 For sparse estimation we set $\bp_k = \sqrt{\rho} P_{S_{c}}(\bbeta_k)$ and $\bD_{\rho} = \sqrt{\rho} \bI$.
@@ -149,7 +149,7 @@ We proceed as follows:
     \item Given $\rho_{l}$, obtain $\bbeta_{c,l+1} = \argmin_{\bbeta} L(\bbeta) + \rho_{l} \dist(\bbeta, S_{c})^{2}$ using the IRWLS surrogate and $\bbeta_{c,l}$ as a warm-start.
     \item Set $l \to l + 1$ and update $\rho_{l} \to \rho_{l+1}$.
 \end{enumerate}
-If the sequence $\{\rho_{l}\}$ is chosen appropriately, then $\bbeta_{c,l}$ converges to $\bbeta_{c}$.
+If the sequence $\{\rho_{l}\}$ is chosen appropriately, then $\bbeta_{c,l}$ converges to $\bbeta_{c}$ with negligible numerical instability.
 
 \section*{\center Two Candidate MM Algorithms}
 In this section we derive two algorithms using the IRWLS surrogate.
@@ -159,28 +159,33 @@ The Hessian $\bX^{t} \bX + \rho \bI$ is likely to have poor numerical properties
 Furthermore, one cannot rely on caching a factorization of the Hessian because it depends on a changing penalty coefficient $\rho$.
 
 Alternatively, if $\bX$ has singular value decomposition $\bU \bS \bV^{t}$ then the normal equations reduce to
-\begin{align*}
+\begin{equation}
+\label{alg:MM}
+\begin{aligned}
     (\bV \bS^{2} \bV^{t} + \rho \bI) \bbeta &= \bX^{t} \bz_{k} + \rho \bp_{k} \\
     \implies \bbeta_{k+1} &= \bV \bD^{-1} \bS \bU^{t} \bz_{k}
     + \rho \bV \bD^{-1} \bV^{t} \bp_{k} \\
     \implies \bbeta_{k+1} &= \bM_{1} \bz_{k} + \bM_{2} \bp_{k}.
-\end{align*}
+\end{aligned}
+\end{equation}
 where $\bD = (\bS^{2} + \rho \bI)$.
 The matrices $\bM_{1}$ and $\bM_{2}$ may be cached once $\rho$ is changed.
 This makes for a simple MM algorithm based on two GEMV operations per iteration.
+Nesterov acceleration is a prerequisite for a fast proximal distance algorithm.
 
 The method of steepest descent is also attractive.
 The gradient for the IRWLS surrogate is the sum $-\sum_{i=1}^m 1_{\{1-y_i\bx_i^t\bbeta > 0\}}(1-y_i\bx_i^t\bbeta)y_i\bx_i$.
-Because the surrogate is a quadratic, it is easy to compute an approximately optimal step size $\gamma_{k}$ for a given descent direction $\bq_{k} \equiv \nabla g_{\rho}(\bbeta_{k} \mid \bbeta_{k})$:
-\begin{align*}
-    \gamma_{k} &= \argmin_{\gamma} g_{\rho}(\bbeta_{k} - \gamma \bq_{k}) \\
-    &= \frac{\|\bq_{k}\|^{2}}{\|\bX \bq_{k}\|^{2} + \rho \|\bq_{k}\|^{2}}.
-\end{align*}
+Because the surrogate is a quadratic, it is easy to compute an approximately optimal step size $\gamma_{k}$ for a given descent direction $\bq_{k} \equiv \nabla g_{\rho}(\bbeta_{k} \mid \bbeta_{k})$.
 The steepest descent update is therefore
-\[
-    \bbeta_{k+1} = \bbeta_{k} - \gamma_{k} \bq_{k}.
-\]
-In practice, the denominator in the step size formula should be perturbed by a small number $\epsilon$ (such as the machine epsilon) to avoid numerical issues.
+\begin{equation}
+\label{alg:SD}
+\begin{aligned}
+    \gamma_{k} &= \argmin_{\gamma} g_{\rho}(\bbeta_{k} - \gamma \bq_{k})
+    = \frac{\|\bq_{k}\|^{2}}{\|\bX \bq_{k}\|^{2} + \rho \|\bq_{k}\|^{2}}, \\
+    \bbeta_{k+1} &= \bbeta_{k} - \gamma_{k} \bq_{k}.
+\end{aligned}
+\end{equation}
+In practice, the denominator in the step size formula should be perturbed by a small number $\epsilon$ (such as the machine epsilon) to avoid the indeterminate form $0 / 0$.
 Furthermore, step-halving should be used to guarantee decreasing the penalized objective.
 
 \section*{\center Numerical Experiments}
@@ -205,28 +210,49 @@ Binary classification is straightforward using the decision rule $\bx \mapsto \s
 In the examples with multiple classes $N$, we train $\binom{N}{2}$ SVMs under the one-against-one paradigm.
 If classes are labeled $\{1, 2, \ldots, N\}$ then the we take our decision rule to be the ``Max Vote'' classifier $\bx \mapsto \arg\max v_{j}(\bx)$ where $v_{j}(\bx)$ is the number of votes received for class $j$ from each of the $\binom{N}{2}$ SVMs based on the binary decision rule.
 
+Here we refer to the algorithms implied by (\ref{alg:MM}) and (\ref{alg:SD}) as ``MM'' and ``SD'', respectively.
+Method MM uses Nesterov acceleration, whereas SD only uses step-halving to avoid an increase in the objective.
+
 \subsection*{Experiment 1: Sensitivity to Initial Conditions}
 
-Vary $\beta_{0}$ over 100 replicates.
-
+To check sensitivity to the initial guess, $\bbeta_{0}$, we solve each SVM problem with 100 replicates with each component of $\bbeta_{0}$ drawn from the standard normal distribution.
+We report the total number of iterations, time, test accuracy, objective, and distance to the sparsity set for each dataset in Table \ref{tab:experiment1}.
+Iteration counts, timings, objectives, and distances are summed over multiple SVMs in the case of multiple classes; for example, in an example with 10 classes we take the objective as $\sum_{j} \text{objective}(\text{SVM}~j)$ where the sum ranges over $\binom{10}{2}$ SVMs.
+Values for objectives and distances are adjusted by number of samples and number of features, respectively, to account for problem size.
+During training, each SVM (in both binary and multi-class cases) is alloted $10^{4}$ inner iterations to minimize the distance penalized objective for fixed $\rho$ up to a relative tolerance $\epsilon = 10^{-6}$.
+The sparsity level is restricted to $c = \lceil 0.5 \times \text{features} \rceil$ across all examples.
+We set $\rho_{0} = 1$ and send $\rho_{n}$ to $\infty$ by the update $\rho_{n+1} = 1.5 \rho_{n}$ over 50 outer iterations.
 \begin{table}[!h]
     \centering
-    \begin{tabular}{lllll}
+    \begin{scriptsize}
+    \begin{tabular}{llllll}
         \toprule
-        Name & Time (s) & Iter & Train Acc. & Test Acc. \\
+        Name & Iter. & Time (s) & Acc. (\%) & Obj. & Dist. \\
         \midrule
-        \texttt{synthetic} & ??? & ??? & ??? & ??? \\
-        \texttt{iris} & ??? & ??? & ??? & ??? \\
-        \texttt{letter-recognition} & ??? & ??? & ??? & ??? \\
-        \texttt{MNIST-digits} & ??? & ??? & ??? & ??? \\
+        \texttt{synthetic} &&&&& \\
+        \hphantom{ab} MM & 269 & 0.34 & 87.0 & $2.273 \times 10^{-7}$ & $1.4 \times 10^{-6}$ \\
+        \hphantom{ab} SD & 4511 & 0.26 & 100.0 & $1.202 \times 10^{-6}$ & $5.3 \times 10^{-6}$ \\
+        \texttt{iris} &&&&& \\
+        \hphantom{ab} MM & 2440 & $2.0 \times 10^{-3}$ & 90.0 & 0.1990 & $3.7 \times 10^{-4}$ \\
+        \hphantom{ab} SD & 7527 & $7.6 \times 10^{-3}$ & 90.0 & 0.2715 & $6.2 \times 10^{-4}$ \\
+        \texttt{letter-recognition} &&&&& \\
+        \hphantom{ab} MM & $1.5 \times 10^{6}$ & 10 & 78.0 & 67.07 & 1.0 \\
+        \hphantom{ab} SD & $4.8 \times 10^{6}$ & 58 & 73.0 & 109.4 & 1.3 \\
+        \texttt{MNIST-digits} &&&&& \\
+        \hphantom{ab} MM & 8049 & 351 & 10.0 & 42.46 & 0.040 \\
+        \hphantom{ab} SD & $1.4 \times 10^{5}$ & 898 & 11.0 & 42.48 & 0.042 \\
         \bottomrule
     \end{tabular}
-    \caption{Results averaged over 100 replicates.}
+    \end{scriptsize}
+    \caption{
+        \label{tab:experiment1}
+        Results indicate median values aggregated from 100 replicates.
+        }
 \end{table}
 
 \subsection*{Experiment 2: Sensitivity to Sparsity Level}
 
-Vary sparsity level $c$ over some range.
+Vary sparsity level $s$ over some range.
 
 \begin{table}[!h]
     \centering
@@ -240,7 +266,7 @@ Vary sparsity level $c$ over some range.
         \texttt{MNIST-digits} & ??? & ??? & ??? & ??? \\
         \bottomrule
     \end{tabular}
-    \caption{Results averaged over 100 replicates.}
+    \caption{To be implemented soon.}
 \end{table}
 
 \end{document}
