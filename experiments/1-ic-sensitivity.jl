@@ -2,22 +2,7 @@ using SparseSVM
 using CSV, DataFrames, Random
 
 include("load_data.jl")
-
-# Algorithm Option Definitions
-@enum AlgOption SD=1 MM=2
-
-function get_algorithm_func(opt::AlgOption)
-    if opt == SD
-        return sparse_steepest!
-    elseif opt == MM
-        return sparse_direct!
-    else
-        error("Unknown option $(opt)")
-    end
-end
-
-make_classifier(::Type{MultiSVMClassifier}, nfeatures, classes) = MultiSVMClassifier(nfeatures, classes)
-make_classifier(::Type{BinarySVMClassifier}, nfeatures, classes) = BinarySVMClassifier(nfeatures, Dict(i=>string(c) for (i, c) in enumerate(classes)))
+include("common.jl")
 
 function run_experiment(algorithm::AlgOption, dataset, ctype=MultiSVMClassifier;
     ntrials::Int=100,

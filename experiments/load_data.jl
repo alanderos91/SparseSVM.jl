@@ -17,12 +17,18 @@ function load_data(fname; seed::Int=1234)
         cols = [:Class, :xbox, :ybox, :width, :height, :pixels, :xbar, :ybar, :x2bar, :y2bar, :xybar, :x2ybr, :xy2br, :xedge, :xegvy, :yedge, :yegvx]
         colidx = collect(2:17)
         shuffle_samples = false
-    elseif fname =="MNIST"
+    elseif fname == "MNIST"
         fname = "data/MNIST.csv"
         has_header = true
         cols = [[Symbol("x$(i)") for i in 1:784]; :Class]
         colidx = collect(1:784)
         shuffle_samples = false # consider shuffling harder examples into train set
+    elseif fname in ["signal-dense", "signal-sparse", "signal-vsparse"]
+        fname = "data/$(fname).csv"
+        has_header = true
+        cols = [[Symbol("x$(i)") for i in 1:500]; :Class]
+        colidx = collect(1:500)
+        shuffle_samples = false
     else
         error("Unknown data set $(fname).")
     end
