@@ -82,10 +82,10 @@ end
 using LinearAlgebra
 BLAS.set_num_threads(10)
 
-k_grid = [1:1:10; 40:1:60; 240:1:260; 365:1:385; 450:5:500]
+k_grid = 501:-1:0
 
 for dataset in ARGS
-    for opt in (SD, MM)
+    for opt in (MM, SD)
         run_experiment(opt, dataset, k_grid, tol=1e-6, ninner=10^4, nouter=50, mult=1.2)
     end
 end
