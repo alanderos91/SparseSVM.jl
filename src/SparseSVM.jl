@@ -241,23 +241,15 @@ function sparse_direct!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T
   (p, idx) = (copy(b), collect(1:n)) # for projection
 
   # unpack
-  U, s, V = extras.U, extras.s, extras.V
-  z, d1, d2 = extras.z, extras.d1, extras.d2
-  M1, M2, Mtmp = extras.M1, extras.M2, extras.Mtmp
+  U, s, V, S = extras.U, extras.s, extras.V, extras.S
+  z, d1 = extras.z, extras.d1
+  buf1, buf2 = extras.buf1, extras.buf2
   b_old = extras.b_old
 
   # Constants
   for i in eachindex(s)
-    denominator = inv(s[i]^2 + rho)
-    d1[i] = s[i] * denominator
-    d2[i] = rho * denominator
+    d1[i] = inv(s[i]^2 + rho)
   end
-  # M1 = V * Diagonal(d1) * U'
-  # M2 = V * Diagonal(d2) * V'
-  mul!(Mtmp, V, Diagonal(d1))
-  mul!(M1, Mtmp, U')
-  mul!(Mtmp, V, Diagonal(d2))
-  mul!(M2, Mtmp, V')
 
   Xb = X * b
 
@@ -282,8 +274,16 @@ function sparse_direct!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T
         z[i] = Xb[i]
       end
     end
-    mul!(b, M2, p)
-    mul!(b, M1, z, true, true)
+    # b = V * D * S' * U' * z
+    mul!(buf1, U', z)
+    mul!(buf2, S', buf1)
+    lmul!(Diagonal(d1), buf2)
+    mul!(b, V, buf2)
+
+    # b = b + rho * (V * D * V' * p)
+    mul!(buf2, V', p)
+    lmul!(Diagonal(d1), buf2)
+    mul!(b, V, buf2, rho, true)
 
     # Nesterov acceleration
     γ = (iter - 1) / (iter + 2 - 1)
@@ -318,20 +318,25 @@ Compute `svd(X)` and allocate additional arrays used by `sparse_direct!`.
 """
 function alloc_svd_and_extras(X)
   T = eltype(X)
-  Xsvd = svd(X)
+  Xsvd = svd(X, full=true)
   U = Xsvd.U # left singular vectors
   s = Xsvd.S # singular values
   V = Xsvd.V # right singular vectors
 
   (m, n) = size(X)
-  z = zeros(T, m)          # stores yᵢ * (Xb)ᵢ or yᵢ
-  d1 = zeros(T, length(s)) # for Diagonal matrix sᵢ / (sᵢ² + rho)
-  d2 = zeros(T, length(s)) # for Diagonal matrix 1 / (sᵢ² + rho)
-  M1 = zeros(T, n,  m)     # stores V * D₁ * U'
-  M2 = zeros(T, n, n)      # stores V * D₂ * V'
-  Mtmp = zeros(T, n, n)    # for computing M₁ and M₂
 
-  extras = (U=U, s=s, V=V, z=z, d1=d1, d2=d2, M1=M1, M2=M2, Mtmp=Mtmp, b_old=zeros(n))
+  if m ≥ n
+    S = [Diagonal(s); zeros(m-n, n)]
+  else
+    S = [Diagonal(s) zeros(m, n-m)]
+  end
+
+  z = zeros(T, m)          # stores yᵢ * (Xb)ᵢ or yᵢ
+  d1 = zeros(T, length(s)) # for Diagonal matrix 1 / (sᵢ² + rho)
+  buf1 = zeros(m)          # for mat-vec multiply
+  buf2 = zeros(n)          # for mat-vec multiply
+
+  extras = (U=U, s=s, V=V, S=S, z=z, d1=d1, buf1=buf1, buf2=buf2, b_old=zeros(n))
 end
 
 export sparse_direct, sparse_direct!, sparse_steepest, sparse_steepest!
