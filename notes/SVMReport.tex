@@ -1,6 +1,10 @@
 \documentclass[11pt]{article}
 \usepackage{amsbsy,amsthm,amsmath,amssymb}
 \usepackage{booktabs}
+\usepackage{graphicx}
+
+\graphicspath{{../experiments/}}
+
 \newtheorem{proposition}{Proposition}[section]
 \newtheorem{example}{Example}[section]
 \newcommand{\svskip}{\vspace{1.75mm}}
@@ -158,20 +162,21 @@ Naively, one may attempt to solve the normal equations directly and obtain an ex
 The Hessian $\bX^{t} \bX + \rho \bI$ is likely to have poor numerical properties, especially in high dimensional problems, which thwart any line of attack based on iterative methods like LSMR.
 Furthermore, one cannot rely on caching a factorization of the Hessian because it depends on a changing penalty coefficient $\rho$.
 
-Alternatively, if $\bX$ has singular value decomposition $\bU \bS \bV^{t}$ then the normal equations reduce to
+Alternatively, if $\bX$ has full singular value decomposition $\bU \bS \bV^{t}$ then the normal equations reduce to
 \begin{equation}
 \label{alg:MM}
 \begin{aligned}
-    (\bV \bS^{2} \bV^{t} + \rho \bI) \bbeta &= \bX^{t} \bz_{k} + \rho \bp_{k} \\
-    \implies \bbeta_{k+1} &= \bV \bD^{-1} \bS \bU^{t} \bz_{k}
+    (\bV \bS^{t} \bS \bV^{t} + \rho \bI) \bbeta &= \bX^{t} \bz_{k} + \rho \bp_{k} \\
+    \implies \bbeta_{k+1} &= \bV \bD^{-1} \bS^{t} \bU^{t} \bz_{k}
     + \rho \bV \bD^{-1} \bV^{t} \bp_{k} \\
     \implies \bbeta_{k+1} &= \bM_{1} \bz_{k} + \bM_{2} \bp_{k}.
 \end{aligned}
 \end{equation}
-where $\bD = (\bS^{2} + \rho \bI)$.
+where $\bD$ is diagonal with $d_{i} = s_{i}^{2} + \rho$.
 The matrices $\bM_{1}$ and $\bM_{2}$ may be cached once $\rho$ is changed.
 This makes for a simple MM algorithm based on two GEMV operations per iteration.
-Nesterov acceleration is a prerequisite for a fast proximal distance algorithm.
+Alternatively, one can carry out matrix-vector products using only two additional buffers.
+In either case, Nesterov acceleration is a prerequisite for a fast proximal distance algorithm.
 
 The method of steepest descent is also attractive.
 The gradient for the IRWLS surrogate is the sum $-\sum_{i=1}^m 1_{\{1-y_i\bx_i^t\bbeta > 0\}}(1-y_i\bx_i^t\bbeta)y_i\bx_i$.
@@ -252,21 +257,40 @@ We set $\rho_{0} = 1$ and send $\rho_{n}$ to $\infty$ by the update $\rho_{n+1} 
 
 \subsection*{Experiment 2: Sensitivity to Sparsity Level}
 
-Vary sparsity level $s$ over some range.
-
-\begin{table}[!h]
+Next we examine sensitivity of various metrics to the choice of sparsity sets, including the (i) mean squared error of model parameters $\bbeta$ to the ground truth $\bbeta^{0}$, (ii) estimates for the bias parameter, (iii) Type I and Type II errors, (iv) prediction accuracy, and (v) compute time.
+Because some metrics require knowledge of $\bbeta^{0}$, we simulate a synthetic data set:
+\begin{enumerate}
+    \item Inputs: $n$ samples, $p$ features, $s$ number of causal features.
+    \item For each row $\bx_{i}$ of the data matrix $\bX$ (without the column $\boldsymbol{1}$), take $x_{ji} = \pm j/p + \mathcal{N}(0,1)$. This choice sets different scales for each feature in order to avoid exchangeability issues that may affect uniqueness of $\bbeta^{0}$.
+    \item Standardize $\bX$ so that features have mean $0$ and variance $1$.
+    \item Simulate a random set of indices $\mathcal{J} \subset \{1,2,\ldots,p\}$ such that $|\mathcal{J}| = s$.
+    \item Construct $\bbeta^{0} \in \mathbb{R}^{p+1}$ such that $\beta_{j}^{0} = j/p + \mathcal{N}(0,1)$ if $j \in \mathcal{J}$; otherwise $\beta_{j}^{0} = 0$. Note that the bias parameter $\beta_{p+1}^{0} = 0$.
+    \item Take $\by = \sgn([\bX~\boldsymbol{1}] \bbeta^{0})$.
+\end{enumerate}
+We use this recipe to construct 3 examples each with $n = 1000$ samples and $p = 500$ features: \texttt{signal-dense} ($s=500$), \texttt{signal-sparse} ($s=50$), and \texttt{signal-vsparse} ($s=5$).
+\begin{figure}[!ht]
     \centering
-    \begin{tabular}{lllll}
-        \toprule
-        Name & Time (s) & Iter & Train Acc. & Test Acc. \\
-        \midrule
-        \texttt{synthetic} & ??? & ??? & ??? & ??? \\
-        \texttt{iris} & ??? & ??? & ??? & ??? \\
-        \texttt{letter-recognition} & ??? & ??? & ??? & ??? \\
-        \texttt{MNIST-digits} & ??? & ??? & ??? & ??? \\
-        \bottomrule
-    \end{tabular}
-    \caption{To be implemented soon.}
-\end{table}
+    \includegraphics[width=\textwidth]{signal-dense}
+    \caption{
+        Results with $s = 500$ (purple).
+        SD is green, MM is in blue.
+    }
+\end{figure}
+\begin{figure}[!ht]
+    \centering
+    \includegraphics[width=\textwidth]{signal-sparse}
+    \caption{
+        Results with $s = 50$ (purple).
+        SD is green, MM is in blue.
+    }
+\end{figure}
+\begin{figure}[!ht]
+    \centering
+    \includegraphics[width=\textwidth]{signal-vsparse}
+    \caption{
+        Results with $s = 5$ (purple).
+        SD is green, MM is in blue.
+    }
+\end{figure}
 
 \end{document}

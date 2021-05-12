@@ -32,16 +32,16 @@ for exp in ("signal-dense", "signal-sparse", "signal-vsparse")
         scatter!(fig, xs, df.MSE2, label=alg, ylab="bias", title=exp, subplot=2, m=(1, sym))
         vline!(fig, [sopt], subplot=2, label=nothing)
 
-        scatter!(fig, xs, df.percent, label=alg, legend=:outerright, ylab="Acc (%)", subplot=3, m=(1, sym), ylim=(0, 100))
+        scatter!(fig, xs, df.percent, label=alg, ylab="Acc (%)", subplot=3, m=(1, sym), ylim=(0, 100))
         vline!(fig, [sopt], subplot=3, label=nothing)
         
         scatter!(fig, xs, FDR, label=alg, ylab="FDR", subplot=4, m=(1, sym))
         vline!(fig, [sopt], subplot=4, label=nothing)
 
-        scatter!(fig, xs, FNR, label=alg, ylab="FNR", xlab="sparsity", subplot=5, m=(1, sym))
+        scatter!(fig, xs, FNR, label=alg, ylab="FNR", xlab="sparsity (%)", subplot=5, m=(1, sym))
         vline!(fig, [sopt], subplot=5, label=nothing)
 
-        scatter!(fig, xs, df.time, label=alg, legend=:outerright, ylab="time (s)", subplot=6, m=(1, sym))
+        scatter!(fig, xs, df.time, label=alg, ylab="time (s)", subplot=6, m=(1, sym))
         vline!(fig, [sopt], subplot=6, label=nothing)
     end
     savefig(fig, "experiments/$(exp).png")
