@@ -12,9 +12,9 @@ rng = MersenneTwister(seed)
 
 # Simulate data.
 X = zeros(n, p)         # n samples, p features
+z = collect(1:p) ./ p
 for xi in eachrow(X)
-    z = rand((-1,1))
-    xi[:] .= z .+ randn(rng, p)
+    xi[:] .= rand((-1,1)) .* z + randn(rng, p)
 end
 μ = mean(X, dims=1)     # mean of each feature
 σ = std(X, dims=1)      # standard deviation of each feature
@@ -30,7 +30,7 @@ end
 sort!(J)
 
 β = zeros(p+1)              # coefficients + bias; bias = 0
-β[J] .= 2 .+ randn(rng, d)   # sample from N(2,1)
+β[J] .= J ./ p .+ randn(rng, d)  # sample from N(0,1)
 y = sign.(X*β)              # simulate classes
 
 # Write to file.
