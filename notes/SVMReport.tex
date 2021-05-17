@@ -141,7 +141,7 @@ g_{\rho}(\bbeta \mid \bbeta_{k})
 where $\bz_k$ has $i$th component $y_i$ when $y_i \bx_i^t\bbeta_k \le 1$
 and $\bx_i^t\bbeta_k$ otherwise. 
 This formulation of the problem connects two important cases.
-A ridge penalty version requires setting $\bp_{k} = \bzero$ and $\bD_{\rho} = \begin{pmatrix} \sqrt{\rho} \bI & \bzero_{p-1} \\ \bzero_{p-1}^{t} & 0 \end{pmatrix}$.
+A ridge penalty version requires setting $\bp_{k} = \bzero$ and $\bD_{\rho} = \begin{pmatrix} \sqrt{\rho} \bI_{p-1} & \bzero_{p-1} \\ \bzero_{p-1}^{t} & 0 \end{pmatrix}$ (Note: The redundant row is needed so that regularization is not applied to the intercept $\beta_{p}$).
 For sparse estimation we set $\bp_k = \sqrt{\rho} P_{S_{c}}(\bbeta_k)$ and $\bD_{\rho} = \sqrt{\rho} \bI$.
 The advantage of the latter is that it induces a target sparsity level $c$ directly via projection at the expense of convexity, whereas the former is a convex program but suffers from shrinkage.
 
@@ -192,6 +192,105 @@ The steepest descent update is therefore
 \end{equation}
 In practice, the denominator in the step size formula should be perturbed by a small number $\epsilon$ (such as the machine epsilon) to avoid the indeterminate form $0 / 0$.
 Furthermore, step-halving should be used to guarantee decreasing the penalized objective.
+
+\section*{\center An Exact Optimal Value for MM Iterates}
+
+Let us now consider the theoretical properties of the surrogate
+\begin{equation}
+    \label{eq:surrogate}
+    g_{\rho}(\bbeta \mid \bbeta_{k})
+    =
+    \frac{1}{2} \left\|
+        \begin{bmatrix}
+            \bz_{k} \\ \sqrt{\rho} P_{S}(\bbeta_{k})
+        \end{bmatrix}
+        -
+        \begin{bmatrix}
+            \bX \\ \sqrt{\rho} \bI
+        \end{bmatrix}
+        \bbeta
+    \right\|^{2}
+\end{equation}
+from the perspective of duality.
+Although a sparsity set $S$ is not convex, our surrogate is convex in $\bbeta$ for fixed $\rho > 0$ and anchor point $\bbeta_{k}$ becauase its Hessian $\bX^{t}\bX + \rho \bI$ is positive definite.
+Thus, let us pass to the strictly convex quadratic $f(\bx) = \frac{1}{2} \bx^{t} \bA \bx + \bb^{t} \bx + c$.
+It is straightforward to derive its Fenchel conjugate $f^{\ast}(\by) = \frac{1}{2} (\by - \bb)^{t} \bA^{-1} (\by - \bb) - c$.
+We may now consider the primal and dual programs
+\[
+    \text{primal:}~\min_{\bx} f(\bx)
+    \qquad
+    \text{dual:}~\max_{\by} -f^{\ast}(\by).
+\]
+Because $\bA \succ 0$ implies $\bA^{-1} \succ 0$, strong duality holds and so we note
+\[
+    f(\bx_{\mathrm{opt}}) = f^{\ast}(\by_{\mathrm{opt}}) = c,
+\]
+where $\bx_{\mathrm{opt}} = \bA^{-1} \bb$ and $\by_{\mathrm{opt}} = \bb$.
+
+Translating back to minimization of the surrogate in Equation (\ref{eq:surrogate}), we set $\bA = \bX^{t} \bX + \rho \bI$, $\bb = -\bX^{t} \bz_{k} - \rho P_{S}(\bbeta_{k})$, and $c = \frac{1}{2}[\|\bz_{k}\|^{2} + \rho \|P_{S}(\bbeta_{k})\|^{2}]$.
+Given that $\bbeta_{k+1} = \argmin_{\bbeta} g(\bbeta \mid \bbeta_{k})$, we have shown that
+\[
+    g_{\rho}(\bbeta_{k+1} \mid \bbeta_{k})
+    =
+    \frac{1}{2}[\|\bz_{k}\|^{2} + \rho \|P_{S}(\bbeta_{k})\|^{2}],
+\]
+which avoids matrix-vector muliplication in checking objectives after iterating via algorithm (\ref{alg:MM}) or (\ref{alg:SD}).
+Further, it establishes an optimality criterion for the steepest descent algorithm (\ref{alg:SD}).
+
+
+\section*{\center Non-linear Decison Boundaries}
+Now we attempt the so-called ``kernel trick'' to extend our MM algorithms for linear SVM classifiers to non-linear decision boundaries.
+Given a non-linear mapping $\phi(\bx)$ into a possibly infinite dimensional space on feature vectors, the Riesz representation theorem guarantees that one can recover a signal $\bbeta$ via the linear combination $\bbeta = \sum_{i} y_{i} \alpha_{i} \phi(\bx_{i})$. We therefore replace the hinge loss on $\bbeta$ with
+\[
+    L(\balpha) = \sum_{i} \max\{0, 1-y_{i} \sum_{j} y_{j} \alpha_{j} \langle \phi(\bx_{i}), \phi(\bx_{j})\rangle\}^{2}.
+\]
+Majorizing the hinge loss and applying a distance penalty on the $\balpha \in \mathbb{R}^{n}$ leads to the quadratic surrogate
+\begin{equation}
+    \label{eq:nlsurrogate}
+    g_{\rho}(\balpha \mid \balpha_{k})
+    =
+    \frac{1}{2} \left\|
+    \begin{pmatrix}
+        \bz_{k} \\ \sqrt{\rho} P_{S}(\balpha_{k})
+    \end{pmatrix}
+    -
+    \begin{pmatrix}
+        \bK \bY \\ \sqrt{\rho} \bI
+    \end{pmatrix}
+    \balpha
+    \right\|^{2},
+\end{equation}
+where $K_{ij} = \langle \phi(\bx_{i}), \phi(\bx_{j}) \rangle$ is a positive semi-definite kernel and we define $\bY = \mathrm{Diag}(\by)$.
+Vector $\bz_{k}$ is defined in an analogous fashion as in (\ref{eq:surrogate})
+\[
+    z_{k,i} = \begin{cases}
+        y_{i}, & y_{i} \sum_{j} y_{j} \alpha_{k,j} \langle \phi(\bx_{i}), \phi(\bx_{j})\rangle \le 1 \\
+        \sum_{j} y_{j} \alpha_{k,j} \langle \phi(\bx_{i}), \phi(\bx_{j})\rangle, & \text{otherwise}.
+    \end{cases}
+\]
+In this version of the problem, one projects model parameters $\balpha$ onto a sparsity set $S$ to identify samples that drive a decision boundary.
+
+The MM algorithm analogous to algorithm (\ref{alg:MM}) is
+\begin{equation}
+    \label{alg:nlMM}
+    \balpha_{k+1}
+    =
+    \bY \bQ \bD_{1} \bQ^{t} \bz_{k} + \rho \bY \bQ \bD_{2} \bQ^{t} \bY P_{S}(\balpha_{k}),
+\end{equation}
+where matrix $\bK$ has spectral decomposition $\bQ \bLambda \bQ^{t}$, $\bD_{1} = (\Lambda^{2} + \rho \bI)^{-1} \bLambda$, and $\bD_{2} = (\Lambda^{2} + \rho \bI)^{-1}$.
+This derivation exploits the fact that $\bY \bY = \bI$ and $\bQ^{t} \bQ = \bQ \bQ^{t} = \bI$.
+As before, a single decomposition allows one to anneal $\rho$ and tune the choice of sparsity set $S$.
+The required matrix inverses involve positive definite diagonal matrices which are trivial to compute.
+
+Similarly, the steepest descent algorithm to minimize surrogate (\ref{eq:nlsurrogate}) is
+\begin{equation}
+\label{alg:nlSD}
+\begin{aligned}
+    \gamma_{k} &= \argmin_{\gamma} g_{\rho}(\balpha_{k} - \gamma \bq_{k})
+    = \frac{\|\bq_{k}\|^{2}}{\|\bK \bY \bq_{k}\|^{2} + \rho \|\bq_{k}\|^{2}}, \\
+    \balpha_{k+1} &= \balpha_{k} - \gamma_{k} \bq_{k}.
+\end{aligned}
+\end{equation}
 
 \section*{\center Numerical Experiments}
 
