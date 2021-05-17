@@ -38,7 +38,7 @@ function run_experiment(algorithm::AlgOption, dataset, ctype=MultiSVMClassifier;
     
     # Pre-compile
     classifier = make_classifier(ctype, nfeatures, classes)
-    @timed trainMM(classifier, f, ytrain, Xtrain, tol, k, nouter=nouter, ninner=ninner, mult=mult)
+    @timed trainMM(classifier, f, ytrain, Xtrain, tol, k, nouter=5, ninner=5, mult=mult)
     
     # Run the experiment several times.
     results = open("experiments/$(dataset)/experiment1-k=$(k)-$(string(algorithm)).out", "w")
@@ -90,7 +90,8 @@ end
 
 ##### Example 3: letter-recognition #####
 if "letter-recognition" in ARGS
-    for opt in (SD, MM)
+    # for opt in (SD, MM)
+    for opt in (MM,)
         run_experiment(opt, "letter-recognition", ntrials=100, tol=1e-6,
             ninner=10^4, nouter=50, mult=1.2)
     end
