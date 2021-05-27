@@ -1,4 +1,4 @@
-function load_data(fname; seed::Int=1234)
+function load_data(fname; seed::Int=1234, intercept::Bool=true)
     if fname == "synthetic"
         fname = "data/synthetic.csv"
         has_header = true
@@ -23,6 +23,12 @@ function load_data(fname; seed::Int=1234)
         cols = [[Symbol("x$(i)") for i in 1:784]; :Class]
         colidx = collect(1:784)
         shuffle_samples = false # consider shuffling harder examples into train set
+    elseif fname == "spiral300"
+        fname = "data/spiral300.dat"
+        has_header = true
+        cols = [:x1, :x2, :Class]
+        colidx = 1:2
+        shuffle_samples = true
     elseif fname in ["signal-dense", "signal-sparse", "signal-vsparse"]
         fname = "data/$(fname).csv"
         has_header = true
@@ -44,7 +50,11 @@ function load_data(fname; seed::Int=1234)
         end
     end
 
-    X = [Matrix{Float64}(data[:, colidx]) ones(nrow(data))]
+    if intercept
+        X = [Matrix{Float64}(data[:, colidx]) ones(nrow(data))]
+    else
+        X = Matrix{Float64}(data[:, colidx])
+    end
 
     return data, X, sort!(classes)
 end

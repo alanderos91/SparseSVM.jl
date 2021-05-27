@@ -26,3 +26,18 @@ function discovery_metrics(x, y)
     end
     return (TP, FP, TN, FN)
 end
+
+function support_vector_idx(classifier::BinarySVMClassifier)
+    α = classifier.b
+    return findall(x -> x != 0, α)
+end
+
+function support_vector_idx(classifier::MultiSVMClassifier)
+    subset = Int[]
+    for svm in classifier.svm
+        s = support_vector_idx(svm)
+        union!(subset, s)
+    end
+    return sort!(subset)
+end
+
