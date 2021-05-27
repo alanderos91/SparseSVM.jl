@@ -16,6 +16,23 @@ function eval_objective(Xb::AbstractVector, y, b, p, rho)
   return obj
 end
 
+function eval_kernel_objective(K, y, a, p, rho)
+  T = eltype(K)
+  n = size(K, 1)
+  obj = zero(T)
+  dist = zero(T)
+  for i in 1:n
+    s = zero(T)
+    for j in 1:n
+      s = s + K[i,j] * y[j] * a[j]
+    end
+    obj = obj + max(0, 1 - y[i] * s)
+    dist = dist + (p[i] - a[i])^2
+  end
+  obj = obj / n + rho / n * dist
+  return obj
+end
+
 eval_objective(X::AbstractMatrix, y, b, p, rho) = eval_objective(X*b, y, b, p, rho)
 ##### END OBJECTIVE #####
 
@@ -110,7 +127,15 @@ function annealing(f, X, y, tol, k; kwargs...)
   annealing!(f, b, X, y, tol, k; kwargs...)
 end
 
-function annealing!(f, b, X, y, tol, k; init::Bool=true, mult=1.5, ninner=1000, nouter=10, rho_init=1.0)
+function annealing!(f, b, X, y, tol, k;
+  init::Bool=true,
+  mult::Real=1.5,
+  ninner::Int=1000,
+  nouter::Int=10,
+  rho_init::Real=1.0,
+  has_intercept::Bool=true
+  )
+  #
   init && randn!(b)
   rho = rho_init
   T = eltype(X) # should be more careful here to make sure BLAS works correctly
@@ -139,7 +164,15 @@ function annealing!(f, b, X, y, tol, k; init::Bool=true, mult=1.5, ninner=1000, 
     # update according to annealing schedule
     rho = mult * rho
   end
-  p = project_sparsity_set!(copy(b), collect(1:length(b)), k)
+  p = copy(b)
+
+  if has_intercept
+    pvec = view(p, 1:length(p)-1)
+  else
+    pvec = p
+  end
+
+  project_sparsity_set!(pvec, collect(1:length(b)), k)
   dist = norm(p - b) / sqrt(length(b))
   print("\niters = ", iters)
   print("\ndist  = ", dist)
@@ -174,9 +207,10 @@ function sparse_steepest!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol:
   (obj, old, iters) = (zero(T), zero(T), 0)
   (grad, increment) = (zeros(T, n), zeros(T, n))
   (p, idx) = (copy(b), collect(1:n)) # for projection
+  pvec = view(p, 1:n-1)
   a = zeros(T, m)
   Xb = X * b
-  project_sparsity_set!(p, idx, k)
+  project_sparsity_set!(pvec, idx, k)
   old = eval_objective(Xb, y, b, p, rho)
   for iter = 1:ninner
     iters = iters + 1
@@ -194,7 +228,7 @@ function sparse_steepest!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol:
     for step = 0:3 # step halving
       @. b = b + increment
       copyto!(p, b)
-      project_sparsity_set!(p, idx, k)
+      project_sparsity_set!(pvec, idx, k)
       mul!(Xb, X, b)
       obj = eval_objective(Xb, y, b, p, rho)
       if obj < old
@@ -239,6 +273,7 @@ function sparse_direct!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T
   (m, n) = size(X)
   (obj, old, iters) = (zero(T), zero(T), 0)
   (p, idx) = (copy(b), collect(1:n)) # for projection
+  pvec = view(p, 1:n-1)
 
   # unpack
   U, s, V, S = extras.U, extras.s, extras.V, extras.S
@@ -254,7 +289,7 @@ function sparse_direct!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T
   Xb = X * b
 
   # initialize projection
-  project_sparsity_set!(p, idx, k)
+  project_sparsity_set!(pvec, idx, k)
 
   # initialize objective
   old = eval_objective(Xb, y, b, p, rho)
@@ -297,7 +332,7 @@ function sparse_direct!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T
 
     # update objective
     copyto!(p, b)
-    project_sparsity_set!(p, idx, k)
+    project_sparsity_set!(pvec, idx, k)
     mul!(Xb, X, b)
     obj = eval_objective(Xb, y, b, p, rho)
     # if iter <= 10 || mod(iter, 10) == 0 
@@ -339,7 +374,68 @@ function alloc_svd_and_extras(X)
   extras = (U=U, s=s, V=V, S=S, z=z, d1=d1, buf1=buf1, buf2=buf2, b_old=zeros(n))
 end
 
-export sparse_direct, sparse_direct!, sparse_steepest, sparse_steepest!
+function sparse_sdk!(a::Vector{T}, K::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, extras; ninner::Int=1000) where T <: Float64
+  #
+  n = size(K, 1)
+  (obj, old, iters) = (zero(T), zero(T), 0)
+  (grad, increment) = (zeros(T, n), zeros(T, n))
+  Y = Diagonal(y)
+  KYa = K * Y * a
+  buffer = zeros(T, n)
+  (p, idx) = (copy(a), collect(1:n)) # for projection
+  project_sparsity_set!(p, idx, k)
+  old = eval_kernel_objective(K, y, a, p, rho)
+  for iter = 1:ninner
+    iters = iters + 1
+    @. grad = a - p # penalty contribution
+    lmul!(Y, grad)  # scale by Y to exploit Y*Y = I
+    for i = 1:n
+      buffer[i] = -y[i] * max(0, 1 - KYa[i] * y[i])
+    end
+    mul!(grad, K, buffer, true, rho) # = K*(KY*α - z) + ρ*Y(α - P(α))
+    lmul!(Y, grad)                   # = YK*(KY*α - z) + ρ(α - P(α))
+    s = norm(grad)^2 # optimal step size
+    mul!(buffer, Y, grad) # = Y*∇g
+    mul!(KYa, K, buffer)  # = K*Y*∇g
+    t = norm(KYa)^2
+    s = s / (t + rho * s + eps()) # add small bias to prevent NaN
+    @. increment = - s * grad
+    # counter = 0
+    for step = 0:3 # step halving
+      @. a = a + increment
+      copyto!(p, a)
+      project_sparsity_set!(p, idx, k)
+      mul!(buffer, Y, a)
+      mul!(KYa, K, buffer)
+      obj = eval_kernel_objective(K, y, a, p, rho)
+      if obj < old
+        break
+      else
+        @. a = a - increment
+        @. increment = 0.5 * increment
+        # counter += 1
+      end
+    end
+    # println(counter, " step halving iterations")
+  #     if iter <= 10 || mod(iter, 10) == 0 
+  #       println("iter = ",iter," obj = ",obj)
+  #     end
+    if  abs(old - obj) < tol * (old + one(T)) # norm(grad) < tol
+      break
+    else
+      old = obj
+    end  
+  end
+  print(iters,"  ",obj)
+  return a, iters, obj
+end
+
+function sparse_sdk(K::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int; kwargs...) where T <: Float64
+  a = randn(T, size(X, 2))
+  sparse_sdk!(a, K, y, rho, tol, k, nothing; kwargs...)
+end
+
+export sparse_direct, sparse_direct!, sparse_steepest, sparse_steepest!, sparse_sdk, sparse_sdk!
 ##### END MM ALGORITHMS #####
 
 ##### CLASSIFICATION #####
