@@ -1,5 +1,5 @@
 module SparseSVM
-using LinearAlgebra, Random
+using KernelFunctions, LinearAlgebra, Random
 
 ##### OBJECTIVE #####
 function eval_objective(Xb::AbstractVector, y, b, p, rho)
@@ -15,6 +15,8 @@ function eval_objective(Xb::AbstractVector, y, b, p, rho)
   end
   return obj
 end
+
+eval_objective(X::AbstractMatrix, y, b, p, rho) = eval_objective(X*b, y, b, p, rho)
 
 function eval_kernel_objective(K, y, a, p, rho)
   T = eltype(K)
@@ -33,7 +35,6 @@ function eval_kernel_objective(K, y, a, p, rho)
   return obj
 end
 
-eval_objective(X::AbstractMatrix, y, b, p, rho) = eval_objective(X*b, y, b, p, rho)
 ##### END OBJECTIVE #####
 
 ##### PROJECTIONS ######
@@ -121,19 +122,18 @@ represents the model parameters.
 - `nouter`: Number of subproblems to solve.
 - `rho_init`: Initial value for the penalty coefficient.
 """
-function annealing(f, X, y, tol, k; kwargs...)
+function annealing(f, X, y, tol, k, intercept::Bool; kwargs...)
   T = eltype(X)
   b = randn(T, size(X, 2))
-  annealing!(f, b, X, y, tol, k; kwargs...)
+  annealing!(f, b, X, y, tol, k, intercept; kwargs...)
 end
 
-function annealing!(f, b, X, y, tol, k;
+function annealing!(f, b, X, y, tol, k, intercept::Bool;
   init::Bool=true,
   mult::Real=1.5,
   ninner::Int=1000,
   nouter::Int=10,
   rho_init::Real=1.0,
-  has_intercept::Bool=true
   )
   #
   init && randn!(b)
@@ -151,7 +151,7 @@ function annealing!(f, b, X, y, tol, k;
   for n in 1:nouter
     print(n,"  ")
     # solve problem for fixed rho
-    _, cur_iters, obj = @time f(b, X, y, rho, tol, k, extras, ninner=ninner)
+    _, cur_iters, obj = @time f(b, X, y, rho, tol, k, intercept, extras, ninner=ninner)
 
     # if abs(old - obj) < tol * (old + 1)
     #   break
@@ -165,14 +165,15 @@ function annealing!(f, b, X, y, tol, k;
     rho = mult * rho
   end
   p = copy(b)
+  n = length(p)
 
-  if has_intercept
-    pvec = view(p, 1:length(p)-1)
+  if intercept
+    (pvec, idx) = (view(p, 1:n-1), collect(1:n-1))
   else
-    pvec = p
+    (pvec, idx) = (p, collect(1:n))
   end
 
-  project_sparsity_set!(pvec, collect(1:length(b)), k)
+  project_sparsity_set!(pvec, idx, k)
   dist = norm(p - b) / sqrt(length(b))
   print("\niters = ", iters)
   print("\ndist  = ", dist)
@@ -191,9 +192,9 @@ Solve the distance-penalized SVM with fixed `rho` via steepest descent.
 
 This version allocates the coefficient vector `b`.
 """
-function sparse_steepest(X::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int; kwargs...) where T <: Float64
+function sparse_steepest(X::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, intercept::Bool; kwargs...) where T <: Float64
   b = randn(T, size(X, 2))
-  sparse_steepest!(b, X, y, rho, tol, k, nothing; kwargs...)
+  sparse_steepest!(b, X, y, rho, tol, k, intercept, nothing; kwargs...)
 end
 
 """
@@ -201,13 +202,17 @@ Solve the distance-penalized SVM with fixed `rho` via steepest descent.
 
 This version updates the coefficient vector `b` and can be used with `annealing`.
 """
-function sparse_steepest!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, extras; ninner::Int=1000) where T <: Float64
+function sparse_steepest!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, intercept::Bool, extras; ninner::Int=1000) where T <: Float64
 #
   (m, n) = size(X)
   (obj, old, iters) = (zero(T), zero(T), 0)
   (grad, increment) = (zeros(T, n), zeros(T, n))
-  (p, idx) = (copy(b), collect(1:n)) # for projection
-  pvec = view(p, 1:n-1)
+  p = copy(b) # for projection
+  if intercept
+    (pvec, idx) = (view(p, 1:n-1), collect(1:n-1))
+  else
+    (pvec, idx) = (p, collect(1:n))
+  end
   a = zeros(T, m)
   Xb = X * b
   project_sparsity_set!(pvec, idx, k)
@@ -258,10 +263,10 @@ Solve the distance-penalized SVM with fixed `rho` via normal equations.
 
 This version allocates the coefficient vector `b`.
 """
-function sparse_direct(X, y, rho, tol, k; kwargs...)
+function sparse_direct(X, y, rho, tol, k, intercept::Bool; kwargs...)
   b = randn(eltype(X), size(X, 2))
   extras = alloc_svd_and_extras(X)
-  sparse_direct!(b, X, y, rho, tol, k, extras; kwargs...)
+  sparse_direct!(b, X, y, rho, tol, k, intercept, extras; kwargs...)
 end
 
 """
@@ -269,11 +274,15 @@ Solve the distance-penalized SVM with fixed `rho` via normal equations.
 
 This version updates the coefficient vector `b` and can be used with `annealing`.
 """
-function sparse_direct!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, extras; ninner::Int=1000) where T <: Float64
+function sparse_direct!(b::Vector{T}, X::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, intercept::Bool, extras; ninner::Int=1000) where T <: Float64
   (m, n) = size(X)
   (obj, old, iters) = (zero(T), zero(T), 0)
-  (p, idx) = (copy(b), collect(1:n)) # for projection
-  pvec = view(p, 1:n-1)
+  p = copy(b) # for projection
+  if intercept
+    (pvec, idx) = (view(p, 1:n-1), collect(1:n-1))
+  else
+    (pvec, idx) = (p, collect(1:n))
+  end
 
   # unpack
   U, s, V, S = extras.U, extras.s, extras.V, extras.S
@@ -374,7 +383,7 @@ function alloc_svd_and_extras(X)
   extras = (U=U, s=s, V=V, S=S, z=z, d1=d1, buf1=buf1, buf2=buf2, b_old=zeros(n))
 end
 
-function sparse_sdk!(a::Vector{T}, K::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, extras; ninner::Int=1000) where T <: Float64
+function sparse_sdk!(a::Vector{T}, K::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, intercept, extras; ninner::Int=1000) where T <: Float64
   #
   n = size(K, 1)
   (obj, old, iters) = (zero(T), zero(T), 0)
@@ -430,9 +439,9 @@ function sparse_sdk!(a::Vector{T}, K::Matrix{T}, y::Vector{T}, rho::T, tol::T, k
   return a, iters, obj
 end
 
-function sparse_sdk(K::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int; kwargs...) where T <: Float64
+function sparse_sdk(K::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, intercept::Bool; kwargs...) where T <: Float64
   a = randn(T, size(X, 2))
-  sparse_sdk!(a, K, y, rho, tol, k, nothing; kwargs...)
+  sparse_sdk!(a, K, y, rho, tol, k, intercept, nothing; kwargs...)
 end
 
 export sparse_direct, sparse_direct!, sparse_steepest, sparse_steepest!, sparse_sdk, sparse_sdk!
@@ -441,7 +450,7 @@ export sparse_direct, sparse_direct!, sparse_steepest, sparse_steepest!, sparse_
 ##### CLASSIFICATION #####
 include("classifier.jl")
 
-export BinarySVMClassifier, MultiSVMClassifier, classify, trainMM
+export SVMBatch, BinaryClassifier, classify, trainMM
 ##### END CLASSIFICATION #####
 
 end # end module
