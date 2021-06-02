@@ -1,16 +1,15 @@
 import Base: show
 
-struct SVMBatch{T,KF}
+struct SVMBatch{T<:AbstractFloat,KF}
   X::Matrix{T}
   K::Union{Nothing,Matrix{T}}
   y::Vector{T}
   kernelf::KF
-  intercept::Bool
 end
 
 """
 ```
-SVMBatch(Xdata, ydata; ftype=nothing, kernelf=nothing, intercept=false)
+SVMBatch(Xdata, ydata; ftype=nothing, kernelf=nothing)
 ```
 
 Create a batch of samples `(ydata, Xdata)` for training a SVM.
@@ -19,12 +18,17 @@ Create a batch of samples `(ydata, Xdata)` for training a SVM.
 - `ftype`: A floating point data type, which must have `AbstractFloat` as a supertype (default=`nothing`).
   By default, the floating point type is inferred from `Xdata`.
 - `kernelf`: A kernel function from KernelFunctions.jl used to construct the kernel matrix `K` (default=`nothing`).
-- `intercept`: Specifies whether to include an intercept in the model (default=`false`).
-  If `intercept == true` and `kernelf === nothing`, then `Xdata` is concatenated with a column of 1s
-  to incorporate an intercept.
-  If `intercept == true` and `kernelf` is a kernel function, then the intercept term is handled later by a classification algorithm.
 """
-function SVMBatch(Xdata, ydata; ftype::Union{Nothing,DataType}=nothing, kernelf::Union{Nothing,Kernel}=nothing, intercept::Bool=false)
+function SVMBatch(Xdata, ydata; ftype::Union{Nothing,DataType}=nothing, kernelf::Union{Nothing,Kernel}=nothing)
+  # Sanity checks.
+  if size(Xdata, 1) != length(ydata)
+    throw(DimensionMismatch("Number of rows in `Xdata` $(size(Xdata, 1)) must match length of `ydata` $(length(ydata))."))
+  end
+
+  if any(yi -> abs(yi) != 1, ydata)
+    throw(DomainError(ydata, "Input labels must have entries -1 or 1."))
+  end
+
   # Use same eltype of Xdata unless caller specifies a format.
   if ftype isa Nothing
     X = Xdata
@@ -43,58 +47,98 @@ function SVMBatch(Xdata, ydata; ftype::Union{Nothing,DataType}=nothing, kernelf:
     K = kernelmatrix(kernelf, X, obsdim=1)
   end
 
-  # Assume no intercept unless caller asks for it.
-  if intercept && kernelf isa Nothing
-    X = [X ones(eltype(X), size(X, 1))]
-  end
-
-  return SVMBatch(X, K, y, kernelf, intercept)
+  return SVMBatch(X, K, y, kernelf)
 end
 
 function Base.show(io::IO, data::SVMBatch)
   println(io, "SVMBatch{", eltype(data.X), "}")
-  println(io, "  ∘ samples:   ", size(data.X, 1))
-  println(io, "  ∘ features:  ", size(data.X, 2))
-  println(io, "  ∘ kernel:    ", data.kernelf)
-  print(io, "  ∘ intercept? ", data.intercept)
+  println(io, "  ∘ samples:   ", nsamples(data))
+  println(io, "  ∘ features:  ", nfeatures(data))
+  print(io, "  ∘ kernel:    ", data.kernelf)
+end
+
+nsamples(data::SVMBatch) = size(data.X, 1)
+nfeatures(data::SVMBatch) = size(data.X, 2)
+kernelf(data::SVMBatch) = data.kernelf
+
+function get_design_matrix(data::SVMBatch, intercept::Bool=false)
+  # check for nonlinear case
+  if kernelf(data) isa Nothing
+    A_predictors = data.X
+  else
+    A_predictors = data.K
+  end
+
+  # check for intercept
+  if intercept
+    A = [A_predictors ones(size(A_predictors, 1))]
+  else
+    A = A_predictors
+  end
+
+  return A
 end
 
 abstract type Classifier end
 
-struct BinaryClassifier{T,KF} <: Classifier
+struct BinaryClassifier{T<:AbstractFloat,KF} <: Classifier
   weights::Vector{T}
+  intercept::Bool
   data::SVMBatch{T,KF}
 end
 
-# constructor
-function BinaryClassifier(data::SVMBatch{T,KF}) where {T,KF}
-  if KF <: Nothing
+"""
+```
+BinaryClassifier(data::SVMBatch; intercept::Bool=false)
+```
+
+Create a binary classifier from the given training `data`, given as a `SVMBatch` object.
+
+### Keyword Arguments
+- `intercept`: Specifies whether to include an intercept in the model (default=`false`).
+"""
+function BinaryClassifier(data::SVMBatch{T}; intercept::Bool=false) where T
+  if kernelf(data) isa Nothing
     # linear case
-    weights = Vector{T}(undef, size(data.X, 2))
+    weights = Vector{T}(undef, nfeatures(data) + intercept)
   else
     # nonlinear case
-    weights = Vector{T}(undef, size(data.X, 1))
+    weights = Vector{T}(undef, nsamples(data) + intercept)
   end
 
-  return BinaryClassifier(weights, data)
+  return BinaryClassifier(weights, intercept, data)
 end
 
-function classify(classifier::BinaryClassifier{T,KF}, x) where {T,KF}
-  fx = zero(T)
+function classify(classifier::BinaryClassifier, x)
+  weights = classifier.weights
+  data = classifier.data
+  κ = kernelf(data)
+  X = data.X
+  y = data.y
 
-  if KF <: Nothing
+  if κ isa Nothing
     # linear case
-    β = classifier.weights
-    fx = dot(x, β)
+    if classifier.intercept
+      @views β, β₀ = weights[1:end-1], weights[end]
+      fx = dot(x, β) + β₀
+    else
+      β = weights
+      fx = dot(x, β)
+    end
   else
     # nonlinear case
-    α = classifier.weights
-    κ = classifier.data.kernelf
-    X = classifier.data.X
-    y = classifier.data.y
-
-    for (j, xj) in enumerate(eachrow(X))
-      fx = fx + α[j] * y[j] * κ(x, xj)
+    fx = zero(T)
+    if classifier.intercept
+      @views α, α₀ = weights[1:end-1], weights[end]
+      for (j, xj) in enumerate(eachrow(X))
+        fx = fx + α[j] * y[j] * κ(x, xj)
+      end
+      fx = fx + α₀
+    else
+      α = weights
+      for (j, xj) in enumerate(eachrow(X))
+        fx = fx + α[j] * y[j] * κ(x, xj)
+      end
     end
   end
 
@@ -102,11 +146,10 @@ function classify(classifier::BinaryClassifier{T,KF}, x) where {T,KF}
 end
 
 function trainMM(classifier::BinaryClassifier, f, tol, k; kwargs...)
-  if classifier.data.kernelf isa Nothing
-    @time annealing!(f, classifier.weights, classifier.data.X, classifier.data.y, tol, k, classifier.data.intercept; kwargs...)
-  else
-    @time annealing!(f, classifier.weights, classifier.data.K, classifier.data.y, tol, k, classifier.data.intercept; kwargs...)
-  end
+  data = classifier.data
+  intercept = classifier.intercept
+  A = get_design_matrix(data, intercept)
+  @time annealing!(f, classifier.weights, A, data.y, tol, k, intercept; kwargs...)
 end
 
 # # implements one-against-one approach
