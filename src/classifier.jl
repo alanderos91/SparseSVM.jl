@@ -66,7 +66,7 @@ function get_design_matrix(data::SVMBatch, intercept::Bool=false)
   if kernelf(data) isa Nothing
     A_predictors = data.X
   else
-    A_predictors = data.K
+    A_predictors = data.K * Diagonal(data.y)
   end
 
   # check for intercept

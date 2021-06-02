@@ -1,6 +1,6 @@
 using SparseSVM, KernelFunctions
 using SparseSVM: nsamples, nfeatures, get_design_matrix, project_sparsity_set!
-using Random, Test
+using LinearAlgebra, Random, Test
 
 @testset "SVMBatch" begin
   (m, n) = (100, 50)
@@ -21,10 +21,12 @@ using Random, Test
   A = get_design_matrix(data, false)
   @test size(A, 1) == nsamples(data)
   @test size(A, 2) == nfeatures(data)
+  @test A == data.X
 
   A = get_design_matrix(data, true)
   @test size(A, 1) == nsamples(data)
   @test size(A, 2) == nfeatures(data) + 1
+  @test A == [data.X ones(m)]
 
   ### nonlinear case ###
   κ = RBFKernel()
@@ -42,10 +44,12 @@ using Random, Test
   A = get_design_matrix(data, false)
   @test size(A, 1) == nsamples(data)
   @test size(A, 2) == nsamples(data)
+  @test A == data.K * Diagonal(data.y)
 
   A = get_design_matrix(data, true)
   @test size(A, 1) == nsamples(data)
   @test size(A, 2) == nsamples(data) + 1
+  @test A == [data.K * Diagonal(data.y) ones(m)]
 
   ### floating point conversion ###
   for ftype in (Float16, Float32, Float64)
