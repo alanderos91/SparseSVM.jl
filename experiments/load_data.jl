@@ -1,4 +1,4 @@
-function load_data(fname; seed::Int=1234, intercept::Bool=true)
+function load_data(fname; seed::Int=1234)
     if fname == "synthetic"
         fname = "data/synthetic.csv"
         has_header = true
@@ -50,11 +50,7 @@ function load_data(fname; seed::Int=1234, intercept::Bool=true)
         end
     end
 
-    if intercept
-        X = [Matrix{Float64}(data[:, colidx]) ones(nrow(data))]
-    else
-        X = Matrix{Float64}(data[:, colidx])
-    end
+    X = Matrix(data[:, colidx])
 
     return data, X, sort!(classes)
 end

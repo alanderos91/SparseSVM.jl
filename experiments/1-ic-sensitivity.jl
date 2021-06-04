@@ -88,7 +88,15 @@ if "iris" in ARGS
     end
 end
 
-##### Example 3: letter-recognition #####
+##### Example 3: spiral #####
+if "spiral300" in ARGS
+    for opt in (SD, MM)
+        run_experiment(opt, "spiral300", ntrials=100, tol=1e-6,
+            ninner=10^4, nouter=50, mult=1.2)
+    end
+end
+
+##### Example 4: letter-recognition #####
 if "letter-recognition" in ARGS
     # for opt in (SD, MM)
     for opt in (MM,)
@@ -97,7 +105,7 @@ if "letter-recognition" in ARGS
     end
 end
 
-##### Example 4: MNIST-digits #####
+##### Example 5: MNIST-digits #####
 if "MNIST-digits" in ARGS
     for opt in (SD, MM)
         run_experiment(opt, "MNIST", ntrials=100, tol=1e-6,
