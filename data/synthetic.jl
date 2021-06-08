@@ -4,5 +4,5 @@ Random.seed!(5357)
 y = randn(m);
 @. y = sign(y);
 X = randn(m, n) .+ y; # this should give two 'nicely' separated Guassian clusters
-
-DataFrame([X y], :auto) |> FileIO.save("data/synthetic.csv")
+label = [yi < 0 ? :A : :B for yi in y]
+DataFrame([X label], :auto) |> FileIO.save("data/synthetic.csv")

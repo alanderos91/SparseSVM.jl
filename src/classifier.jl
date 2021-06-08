@@ -1,53 +1,42 @@
 import Base: show
 
-struct SVMBatch{T<:AbstractFloat,KF}
+struct SVMBatch{T<:AbstractFloat,S,KF}
   X::Matrix{T}
   K::Union{Nothing,Matrix{T}}
   y::Vector{T}
   kernelf::KF
+  label2target::Dict{T,S}
 end
 
 """
 ```
-SVMBatch(Xdata, ydata; ftype=nothing, kernelf=nothing)
+SVMBatch(X, y, label2target, [kernel])
 ```
 
 Create a batch of samples `(ydata, Xdata)` for training a SVM.
+The labels `ydata` must be coded as {-1,1}.
 
-### Keyword Arguments
-- `ftype`: A floating point data type, which must have `AbstractFloat` as a supertype (default=`nothing`).
-  By default, the floating point type is inferred from `Xdata`.
+### Optional Arguments
 - `kernelf`: A kernel function from KernelFunctions.jl used to construct the kernel matrix `K` (default=`nothing`).
 """
-function SVMBatch(Xdata, ydata; ftype::Union{Nothing,DataType}=nothing, kernelf::Union{Nothing,Kernel}=nothing)
+function SVMBatch(X, y, label2target, kernel::Union{Nothing,Kernel}=nothing)
   # Sanity checks.
-  if size(Xdata, 1) != length(ydata)
-    throw(DimensionMismatch("Number of rows in `Xdata` $(size(Xdata, 1)) must match length of `ydata` $(length(ydata))."))
+  if size(X, 1) != length(y)
+    throw(DimensionMismatch("Number of rows in `X` $(size(X, 1)) must match length of `y` $(length(y))."))
   end
 
-  if any(yi -> abs(yi) != 1, ydata)
-    throw(DomainError(ydata, "Input labels must have entries -1 or 1."))
-  end
-
-  # Use same eltype of Xdata unless caller specifies a format.
-  if ftype isa Nothing
-    X = Xdata
-    y = ydata
-  elseif ftype <: AbstractFloat
-    X = convert(Matrix{ftype}, Xdata)
-    y = convert(Vector{ftype}, ydata)
-  else
-    error("Argument `ftype` must be a floating point type.")
+  if any(yi -> abs(yi) != 1, y)
+    throw(DomainError(y, "Input labels must have entries -1 or 1."))
   end
 
   # Assume linear case unless caller specifies a kernel function.
-  if kernelf isa Nothing
+  if kernel isa Nothing
     K = nothing
   else
-    K = kernelmatrix(kernelf, X, obsdim=1)
+    K = kernelmatrix(kernel, X, obsdim=1)
   end
 
-  return SVMBatch(X, K, y, kernelf)
+  return SVMBatch(X, K, y, kernel, label2target)
 end
 
 function Base.show(io::IO, data::SVMBatch)
@@ -81,24 +70,64 @@ end
 
 abstract type Classifier end
 
-struct BinaryClassifier{T<:AbstractFloat,KF} <: Classifier
+struct BinaryClassifier{T<:AbstractFloat,S,KF} <: Classifier
   weights::Vector{T}
   intercept::Bool
-  data::SVMBatch{T,KF}
+  data::SVMBatch{T,S,KF}
 end
 
 """
 ```
-BinaryClassifier(data::SVMBatch; intercept::Bool=false)
+BinaryClassifier{T}(Xdata, targets, refclass; [intercept], [kernel]) where T<:AbstractFloat
 ```
 
-Create a binary classifier from the given training `data`, given as a `SVMBatch` object.
+Create a binary classifier from the given training data given as a matrix `Xdata` and vector `targets`.
+The type paramter `T` may be omitted in which case arrays default to `Float64`.
+Elements in `targets` equal to `refclass` are assigned a positive value.
 
 ### Keyword Arguments
 - `intercept`: Specifies whether to include an intercept in the model (default=`false`).
+- `kernel`: A kernel function from KernelFunctions.jl used to construct the kernel matrix `K` (default=`nothing`).
 """
-function BinaryClassifier(data::SVMBatch{T}; intercept::Bool=false) where T
-  if kernelf(data) isa Nothing
+function BinaryClassifier{T}(Xdata, targets, refclass;
+  intercept::Bool=false,
+  kernel::Union{Nothing,Kernel}=nothing) where T<:AbstractFloat
+  # sanity checks
+  S = eltype(targets)
+  if S != typeof(refclass)
+    error("`targets` and `refclass` have different types.")
+  end
+  unique_labels = label(targets)
+  if refclass ∉ unique_labels
+    error("Reference class $(refclass) not found in `targets`.")
+  end
+
+  # Enforce an encoding using OneVsRest
+  if nlabel(unique_labels) == 2
+    # in this case, we can be explicit about the positive and negative labels
+    if islabelenc(targets, LabelEnc.MarginBased)
+      # labels already coded as {-1,1}
+      enc = LabelEnc.OneVsRest(one(S), -one(S))
+    else
+      # otherwise need to check value for negative label
+      other_class = unique_labels[findfirst(!=(refclass), unique_labels)]
+      enc = LabelEnc.OneVsRest(refclass, other_class)
+    end
+  else
+    # otherwise, there are multiple classes and we can only specify the reference class
+    enc = LabelEnc.OneVsRest(refclass)
+  end
+
+  # handle mapping from target space to labels in {-1,1}
+  y = convertlabel(LabelEnc.MarginBased(T), targets, enc)
+  label2target = Dict(-one(T) => neglabel(enc), one(T) => poslabel(enc))
+
+  # bundle training data into SVMBatch
+  X = convert(Matrix{T}, Xdata)
+  data = SVMBatch(X, y, label2target, kernel)
+
+  # allocate vector that represents model, including intercept as needed
+  if kernel isa Nothing
     # linear case
     weights = Vector{T}(undef, nfeatures(data) + intercept)
   else
@@ -109,7 +138,10 @@ function BinaryClassifier(data::SVMBatch{T}; intercept::Bool=false) where T
   return BinaryClassifier(weights, intercept, data)
 end
 
-function classify(classifier::BinaryClassifier, x)
+"Create a `BinaryClassifier` assuming `Float64` arithmetic. See `BinaryClassifier{T}."
+BinaryClassifier(Xdata, targets, refclass; kwargs...) = BinaryClassifier{Float64}(Xdata, targets, refclass; kwargs...)
+
+function (classifier::BinaryClassifier{T})(x) where T
   weights = classifier.weights
   data = classifier.data
   κ = kernelf(data)
@@ -141,8 +173,8 @@ function classify(classifier::BinaryClassifier, x)
       end
     end
   end
-
-  return sign(fx)
+  prediction = classify(fx, LabelEnc.MarginBased(T))
+  return data.label2target[prediction]
 end
 
 function trainMM(classifier::BinaryClassifier, f, tol, k; kwargs...)
@@ -152,87 +184,105 @@ function trainMM(classifier::BinaryClassifier, f, tol, k; kwargs...)
   @time annealing!(f, classifier.weights, A, data.y, tol, k, intercept; kwargs...)
 end
 
-# # implements one-against-one approach
-# struct MultiSVMClassifier <: Classifier
-#   nclasses::Int
-#   svm::Vector{BinarySVMClassifier}
-#   svm_pair::Vector{Tuple{Int,Int}}
-#   class::Vector{String}
-#   vote::Vector{Int}
-# end
+abstract type MultiClassStrategy end
 
-# # linear case
-# function MultiSVMClassifier(nfeatures::Int, class)
-#   nclasses = length(class)
-#   nsvms = binomial(nclasses, 2)
-#   svm = Vector{BinarySVMClassifier}(undef, nsvms)
-#   svm_pair = Vector{Tuple{Int,Int}}(undef, nsvms)
-#   k = 1
-#   for j in 1:nclasses, i in j+1:nclasses
-#     svm[k] = BinarySVMClassifier(nfeatures, Dict(-1 => string(class[i]), 1 => string(class[j])))
-#     svm_pair[k] = (i, j)
-#     k += 1
-#   end
-#   return MultiSVMClassifier(nclasses, svm, svm_pair, string.(class), zeros(Int, nclasses))
-# end
+"One versus One: Create `k` choose `2` SVMs to classify data on `k` classes."
+struct OVO <: MultiClassStrategy end
 
-# # nonlinear case
-# function MultiSVMClassifier(y::Vector, class)
-#   nclasses = length(class)
-#   nsvms = binomial(nclasses, 2)
-#   svm = Vector{BinarySVMClassifier}(undef, nsvms)
-#   svm_pair = Vector{Tuple{Int,Int}}(undef, nsvms)
-#   k = 1
-#   for j in 1:nclasses, i in j+1:nclasses
-#     nweights = count(class -> class == i || class == j, y)
-#     svm[k] = BinarySVMClassifier(nweights, Dict(-1 => string(class[i]), 1 => string(class[j])))
-#     svm_pair[k] = (i, j)
-#     k += 1
-#   end
-#   return MultiSVMClassifier(nclasses, svm, svm_pair, string.(class), zeros(Int, nclasses))
-# end
+"One versus Rest: Create `k` SVMs to classify data on `k` classes."
+struct OVR <: MultiClassStrategy end
 
-# function classify(classifier::MultiSVMClassifier, x)
-#   fill!(classifier.vote, 0)
-#   for k in eachindex(classifier.svm)
-#     (i, j) = classifier.svm_pair[k]
-#     if classify(classifier.svm[k], x) < 0 # vote for class i
-#       classifier.vote[i] += 1
-#     else # vote for class j
-#       classifier.vote[j] += 1
-#     end
-#   end
-#   return argmax(classifier.vote)
-# end
+struct MultiClassifier{T,S,MCS,KF} <: Classifier
+  svm::Vector{BinaryClassifier{T,S,KF}}
+  strategy::MCS
+  votes::Vector{Int}
+  target2ind::Dict{S,Int}
+  label::Vector{S}
+end
 
-# function classify(classifier::MultiSVMClassifier, κ, X, y, x)
-#   fill!(classifier.vote, 0)
-#   for k in eachindex(classifier.svm)
-#     (i, j) = classifier.svm_pair[k]
-#     subset = findall(class -> class == i || class == j, y)
-#     y_subset = [y[index] == i ? -1.0 : 1.0 for index in subset]
-#     X_subset = X[subset, :]
-#     if classify(classifier.svm[k], κ, X_subset, y_subset, x) < 0 # vote for class i
-#       classifier.vote[i] += 1
-#     else # vote for class j
-#       classifier.vote[j] += 1
-#     end
-#   end
-#   return argmax(classifier.vote)
-# end
+function MultiClassifier{T}(Xdata, targets;
+  strategy::MultiClassStrategy=OVR(),
+  intercept::Bool=false,
+  kernel::Union{Nothing,Kernel}=nothing) where T<:AbstractFloat
+  # setup labeled data and inferred encoding
+  target2subset = labelmap(targets)
+  labeled_data = (Xdata, targets)
+  encoding = LabelEnc.NativeLabels(targets, label(targets))
+  target2ind = encoding.invlabel
+  K = nlabel(encoding)
+  votes = Vector{Int}(undef, K)
 
-# function trainMM(classifier::MultiSVMClassifier, f, y, X, tol, k; kwargs...)
-#   for ij in eachindex(classifier.svm)
-#     (i, j) = classifier.svm_pair[ij]
-#     println("\nTraining class $(i) against class $(j)\n")
-#     subset = findall(class -> class == i || class == j, y)
-#     y_subset = [y[index] == i ? -1.0 : 1.0 for index in subset]
-#     if issymmetric(X) # nonlinear case
-#       X_subset = X[subset, subset]
-#     else # linear case
-#       X_subset = X[subset, :]
-#     end
-#     trainMM(classifier.svm[ij], f, y_subset, X_subset, tol, k; kwargs...)
-#   end
-#   return classifier
-# end
+  # sanity checks
+  if K ≤ 2
+    error("Only $(K) classes detected. Consider using `BinaryClassifier`.")
+  end
+
+  SVMType = BinaryClassifier{T,eltype(targets),typeof(kernel)}
+  if strategy isa OVR # one versus rest
+    svm = Vector{SVMType}(undef, K)
+    for k in 1:K
+      class_k = label(encoding)[k]
+      svm[k] = BinaryClassifier{T}(Xdata, targets, class_k,
+        intercept=intercept, kernel=kernel)
+    end
+  elseif strategy isa OVO # one versus one
+    svm = Vector{SVMType}(undef, binomial(K, 2))
+    k = 1
+    for j in 1:K, i in j+1:K
+      class_i = label(encoding)[i]
+      class_j = label(encoding)[j]
+      idx = union(target2subset[class_i], target2subset[class_j])
+      X_subset, targets_subset = getobs(labeled_data, idx, obsdim=1)
+      svm[k] = BinaryClassifier{T}(X_subset, targets_subset, class_i,
+        intercept=intercept, kernel=kernel)
+      k += 1
+    end
+  else
+    error("Strategy $(strategy) is not yet implemented.")
+  end
+
+  return MultiClassifier(svm, strategy, votes, target2ind, label(encoding))
+end
+
+MultiClassifier(Xdata, targets; kwargs...) = MultiClassifier{Float64}(Xdata, targets; kwargs...)
+
+function (classifier::MultiClassifier{T})(x) where T
+  vote, target2ind = classifier.votes, classifier.target2ind
+  fill!(vote, 0)
+
+  if classifier.strategy isa OVR # one versus rest
+    for f in classifier.svm
+      prediction = f(x)
+      refclass = f.data.label2target[one(T)]
+
+      # only cast vote when 
+      if prediction == refclass
+        k = target2ind[prediction]
+        vote[k] += 1
+      end
+    end
+  elseif classifier.strategy isa OVO # one versus one
+    for f in classifier.svm
+      prediction = f(x)
+      k = target2ind[prediction]
+      vote[k] += 1
+    end
+  else
+    error("Classification for strategy $(strategy) is not yet implemented.")
+  end
+  
+  prediction = classify(vote, LabelEnc.OneOfK)
+  return classifier.label[prediction]
+end
+
+function trainMM(classifier::MultiClassifier{T}, f, tol, k; kwargs...) where T
+  @time for svm in classifier.svm
+    label2target = svm.data.label2target
+    pos = label2target[one(T)]
+    neg = label2target[-one(T)]
+    println("Training $(pos) vs $(neg)")
+    println()
+    trainMM(svm, f, tol, k; kwargs...)
+    println()
+  end
+end

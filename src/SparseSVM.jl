@@ -1,4 +1,5 @@
 module SparseSVM
+using MLDataUtils
 using KernelFunctions, LinearAlgebra, Random
 
 ##### OBJECTIVE #####
@@ -343,14 +344,14 @@ end
 """
 Compute `svd(X)` and allocate additional arrays used by `sparse_direct!`.
 """
-function alloc_svd_and_extras(X)
-  T = eltype(X)
-  Xsvd = svd(X, full=true)
-  U = Xsvd.U # left singular vectors
-  s = Xsvd.S # singular values
-  V = Xsvd.V # right singular vectors
+function alloc_svd_and_extras(A)
+  T = eltype(A)
+  Asvd = svd(A, full=true)
+  U = Asvd.U # left singular vectors
+  s = Asvd.S # singular values
+  V = Asvd.V # right singular vectors
 
-  (m, n) = size(X)
+  (m, n) = size(A)
 
   if m ≥ n
     S = [Diagonal(s); zeros(m-n, n)]
@@ -358,10 +359,10 @@ function alloc_svd_and_extras(X)
     S = [Diagonal(s) zeros(m, n-m)]
   end
 
-  z = zeros(T, m)          # stores yᵢ * (Xb)ᵢ or yᵢ
-  d1 = zeros(T, length(s)) # for Diagonal matrix 1 / (sᵢ² + rho)
-  buf1 = zeros(m)          # for mat-vec multiply
-  buf2 = zeros(n)          # for mat-vec multiply
+  z = zeros(T, m)             # stores yᵢ * (Xb)ᵢ or yᵢ
+  d1 = zeros(T, size(S, 2))   # for Diagonal matrix 1 / (sᵢ² + rho)
+  buf1 = zeros(T, size(U, 1)) # for mat-vec multiply
+  buf2 = zeros(T, size(V, 2)) # for mat-vec multiply
 
   extras = (U=U, s=s, V=V, S=S, z=z, d1=d1, buf1=buf1, buf2=buf2, b_old=zeros(n))
   return extras
@@ -373,7 +374,7 @@ export sparse_direct, sparse_direct!, sparse_steepest, sparse_steepest!
 ##### CLASSIFICATION #####
 include("classifier.jl")
 
-export SVMBatch, BinaryClassifier, classify, trainMM
+export SVMBatch, BinaryClassifier, MultiClassifier, trainMM
 ##### END CLASSIFICATION #####
 
 end # end module
