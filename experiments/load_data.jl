@@ -41,7 +41,6 @@ function load_data(fname; seed::Int=1234)
 
     data = CSV.read(fname, DataFrame, header=has_header)
     rename!(data, cols)
-    classes = unique(data.Class)
 
     if shuffle_samples
         perm = Random.randperm(MersenneTwister(seed), size(data, 1))
@@ -52,5 +51,5 @@ function load_data(fname; seed::Int=1234)
 
     X = Matrix(data[:, colidx])
 
-    return data, X, sort!(classes)
+    return X, Vector(data.Class)
 end

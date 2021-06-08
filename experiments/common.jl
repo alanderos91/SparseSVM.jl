@@ -11,8 +11,11 @@ function get_algorithm_func(opt::AlgOption)
     end
 end
 
-make_classifier(::Type{MultiSVMClassifier}, nfeatures, classes) = MultiSVMClassifier(nfeatures, classes)
-make_classifier(::Type{BinarySVMClassifier}, nfeatures, classes) = BinarySVMClassifier(nfeatures, Dict(i=>string(c) for (i, c) in enumerate(classes)))
+make_classifier(::Type{C}, X, targets, refclass; kwargs...) where C<:MultiClassifier = C(X, targets; kwargs...)
+make_classifier(::Type{C}, X, targets, refclass; kwargs...) where C<:BinaryClassifier = C(X, targets, refclass; kwargs...)
+
+initialize_weights!(local_rng, classifier::BinaryClassifier) = Random.randn!(local_rng, classifier.weights)
+initialize_weights!(local_rng, classifier::MultiClassifier) = foreach(svm -> initialize_weights!(local_rng, svm), classifier.svm)
 
 mse(x, y) = mean( (x - y) .^ 2 )
 
@@ -27,12 +30,12 @@ function discovery_metrics(x, y)
     return (TP, FP, TN, FN)
 end
 
-function support_vector_idx(classifier::BinarySVMClassifier)
-    α = classifier.b
+function support_vector_idx(classifier::BinaryClassifier)
+    α = classifier.weights
     return findall(x -> x != 0, α)
 end
 
-function support_vector_idx(classifier::MultiSVMClassifier)
+function support_vector_idx(classifier::MultiClassifier)
     subset = Int[]
     for svm in classifier.svm
         s = support_vector_idx(svm)
