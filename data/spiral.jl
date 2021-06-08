@@ -56,7 +56,7 @@ feature1, feature2, classes = generate_spiral_data(n1, n2, noise_variance = 0.3)
 df = DataFrame(
     x1 = feature1,
     x2 = feature2,
-    Class = map(c -> c == 1 ? 1 : -1),
+    Class = map(c -> c == 1 ? "A" : "B", classes),
 )
 
 CSV.write("data/spiral$(n1+n2).dat", df)
