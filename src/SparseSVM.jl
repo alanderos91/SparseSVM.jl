@@ -207,15 +207,15 @@ function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol:
   old = eval_objective(Ab, y, b, p, rho)
   for iter = 1:ninner
     iters = iters + 1
-    @. grad = rho * (b - p) # penalty contribution
+    @. grad = rho / (k+intercept) * (b - p) # penalty contribution
     for i = 1:m
       z[i] = - y[i] * max(one(T) - y[i] * Ab[i], zero(T))
     end
-    BLAS.gemv!('T', 1.0, A, z, 1.0, grad)
+    BLAS.gemv!('T', 1/m, A, z, 1.0, grad)
     s = norm(grad)^2 # optimal step size
     mul!(Ab, A, grad)
-    t = norm(Ab)^2
-    s = s / (t + rho * norm(grad)^2 + eps()) # add small bias to prevent NaN
+    t = 1/m * norm(Ab)^2
+    s = s / (t + rho/(k+intercept) * norm(grad)^2 + eps()) # add small bias to prevent NaN
     @. increment = - s * grad
     # counter = 0
     for step = 0:3 # step halving
@@ -276,7 +276,7 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
 
   # Constants
   for i in eachindex(s)
-    d1[i] = inv(s[i]^2 + rho)
+    d1[i] = inv(s[i]^2/m + rho/(k+intercept))
   end
 
   Ab = A * b
@@ -311,7 +311,7 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
     # b = b + rho * (V * D * V' * p)
     mul!(buf2, V', p)
     lmul!(Diagonal(d1), buf2)
-    mul!(b, V, buf2, rho, true)
+    mul!(b, V, buf2, rho/(k+intercept), 1/m)
 
     # Nesterov acceleration
     γ = (iter - 1) / (iter + 2 - 1)
