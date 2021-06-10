@@ -133,6 +133,7 @@ function annealing!(f, b, A, y, tol, k, intercept;
   ninner::Int=1000,
   nouter::Int=10,
   rho_init::Real=1.0,
+  fullsvd::Union{Nothing,SVD}=nothing,
   )
   #
   init && randn!(b)
@@ -142,7 +143,7 @@ function annealing!(f, b, A, y, tol, k, intercept;
 
   # check if svd(A) is needed
   if f isa typeof(sparse_direct!)
-    extras = alloc_svd_and_extras(A)
+    extras = alloc_svd_and_extras(A, fullsvd=fullsvd)
   else
     extras = nothing
   end
@@ -344,9 +345,13 @@ end
 """
 Compute `svd(X)` and allocate additional arrays used by `sparse_direct!`.
 """
-function alloc_svd_and_extras(A)
+function alloc_svd_and_extras(A; fullsvd::Union{Nothing,SVD}=nothing)
   T = eltype(A)
-  Asvd = svd(A, full=true)
+  if fullsvd isa SVD
+    Asvd = fullsvd
+  else
+    Asvd = svd(A, full=true)
+  end
   U = Asvd.U # left singular vectors
   s = Asvd.S # singular values
   V = Asvd.V # right singular vectors
@@ -374,7 +379,7 @@ export sparse_direct, sparse_direct!, sparse_steepest, sparse_steepest!
 ##### CLASSIFICATION #####
 include("classifier.jl")
 
-export SVMBatch, BinaryClassifier, MultiClassifier, trainMM
+export SVMBatch, BinaryClassifier, MultiClassifier, trainMM, trainMM!
 ##### END CLASSIFICATION #####
 
 end # end module

@@ -181,6 +181,12 @@ function trainMM(classifier::BinaryClassifier, f, tol, k; kwargs...)
   data = classifier.data
   intercept = classifier.intercept
   A = get_design_matrix(data, intercept)
+  trainMM!(classifier, A, f, tol, k; kwargs...)
+end
+
+function trainMM!(classifier::BinaryClassifier, A, f, tol, k; kwargs...)
+  data = classifier.data
+  intercept = classifier.intercept
   @time annealing!(f, classifier.weights, A, data.y, tol, k, intercept; kwargs...)
 end
 
