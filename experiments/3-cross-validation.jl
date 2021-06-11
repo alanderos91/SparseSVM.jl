@@ -1,6 +1,6 @@
 using SparseSVM, MLDataUtils, KernelFunctions, LinearAlgebra
 using CSV, DataFrames, Random, Statistics
-using ProgressMeter
+using DelimitedFiles, ProgressMeter
 
 include("load_data.jl")
 include("common.jl")
@@ -19,6 +19,7 @@ function run_experiment(algorithm::AlgOption, dataset, grid, ctype=MultiClassifi
     ninner::Int=1000,
     mult::Real=1.5,
     seed::Int=1234,
+    strategy::MultiClassStrategy=OVR(),
     kernel::Union{Nothing,Kernel}=nothing,
     intercept=false,
     )
@@ -30,86 +31,132 @@ function run_experiment(algorithm::AlgOption, dataset, grid, ctype=MultiClassifi
 
     # Process options
     f = get_algorithm_func(algorithm)
-    gridvals = sort(grid, rev=true) # iterate from least sparse to most sparse models
+    gridvals = sort(grid, rev=false) # iterate from least sparse to most sparse models
 
-    # allocate output
-    kvals = zeros(Int, length(grid), nfolds)
-    train_score = zeros(length(grid), nfolds)
-    val_score = zeros(length(grid), nfolds)
-    test_score = zeros(length(grid), nfolds)
+    # Open output file.
+    results = open("experiments/$(dataset)/experiment3-$(string(algorithm)).out", "w")
+    writedlm(results, ["fold" "sparsity" "k" "iterations" "objective" "distance" "train_accuracy" "validation_accuracy" "test_accuracy"])
 
     # run cross-validation
-    p = Progress(nfolds, 1, "Running CV...")
+    p = Progress(nfolds, 1, "Running CV... ")
     for (j, fold) in enumerate(kfolds(cv_set, k=nfolds, obsdim=1))
         # get training set and validation set
         ((train_X, train_targets), (val_X, val_targets)) = fold
 
         # create classifier and use same initial point
-        classifier = make_classifier(ctype, train_X, train_targets, first(train_targets), kernel=kernel, intercept=intercept)
+        classifier = make_classifier(ctype, train_X, train_targets, first(train_targets), kernel=kernel, intercept=intercept, strategy=strategy)
         initialize_weights!(MersenneTwister(1903), classifier)
 
         # create SVD if needed
-        A = SparseSVM.get_design_matrix(classifier.data, classifier.intercept)
-        Asvd = svd(A, full=true)
+        A, Asvd = get_A_and_SVD(classifier)
 
         # follow path along sparsity sets
         for (i, s) in enumerate(gridvals)
             # compute sparsity parameter k
             nparams = kernel isa Nothing ? size(train_X, 2) : size(train_X, 1)
-            k = round(Int, nparams*s)
+            k = round(Int, nparams*(1-s))
 
             # train classifier enforcing k nonzero parameters
-            trainMM!(classifier, A, f, tol, k, fullsvd=Asvd, nouter=nouter, ninner=ninner, mult=mult, init=false)
+            iters, obj, dist = trainMM!(classifier, A, f, tol, k, fullsvd=Asvd, nouter=nouter, ninner=ninner, mult=mult, init=false, verbose=false)
 
             # compute evaluation metrics
-            train_score[i,j] = accuracy_score(classifier, train_X, train_targets)
-            val_score[i,j] = accuracy_score(classifier, val_X, val_targets)
-            test_score[i,j] = accuracy_score(classifier, test_X, test_targets)
-            kvals[i,j] = k
+            train_acc = accuracy_score(classifier, train_X, train_targets)
+            val_acc = accuracy_score(classifier, val_X, val_targets)
+            test_acc = accuracy_score(classifier, test_X, test_targets)
+
+            writedlm(results, Any[j s*100 k iters obj dist train_acc val_acc test_acc])
         end
 
         next!(p, showvalues=[(:fold, j)])
     end
+    close(results)
 
-    scores = (grid=gridvals, k=kvals, train=train_score, val=val_score, test=test_score)
+    return nothing
+end
+# Make sure we set up BLAS threads correctly
+BLAS.set_num_threads(10)
 
-    return scores
+##### Example 1: synthetic #####
+if "synthetic" in ARGS
+    grid = [0.0; 0.5:0.05:0.95; 0.96:0.01:0.99]
+    println("Running 'synthetic' benchmark")
+    for opt in (SD, MM)
+        # precompile
+        run_experiment(opt, "synthetic", grid, BinaryClassifier{Float64},
+            nfolds=10, tol=1e-6, ninner=2, nouter=2, mult=1.2,
+            intercept=true, kernel=nothing)
+
+        # run
+        run_experiment(opt, "synthetic", grid, BinaryClassifier{Float64},
+            nfolds=10, tol=1e-6, ninner=10^4, nouter=50, mult=1.2,
+            intercept=true, kernel=nothing)
+    end
 end
 
-    # Initialize classifier.
-    # classifier = make_classifier(ctype, Xtrain, targets_train, first(targets_train), kernel=kernel, intercept=intercept)
-    # local_rng = MersenneTwister(1903)
-    # initialize_weights!(local_rng, classifier)
+##### Example 2: iris #####
+if "iris" in ARGS
+    println("Running 'iris' benchmark")
+    grid = [0.0, 0.25, 0.5, 0.75]
+    for opt in (SD, MM)
+        # precompile
+        run_experiment(opt, "iris", grid, MultiClassifier{Float64},
+            nfolds=10, tol=1e-6, ninner=2, nouter=2, mult=1.2,
+            intercept=true, kernel=nothing, strategy=OVO())
 
-    # # Create closure.
-    # execute(ninner, nouter) = @timed trainMM(classifier, f, tol, k, nouter=nouter, ninner=ninner, mult=mult, init=false)
-    
-    # Run the experiment several times.
-    # original_stdout = stdout
-    # results = open("experiments/$(dataset)/experiment1-k=$(k)-$(string(algorithm)).out", "w")
-    # write(results, "trial\tscore\tpercent\ttime\n")
-    # @showprogress 1 "Testing $(algorithm)..." for trial in 1:ntrials
-    #     # Feed STDOUT output to a log file
-    #     # io = open("experiments/$(dataset)/experiment1-k=$(k)-$(string(algorithm))-$(trial).log", "w")
-    #     # redirect_stdout(io)
+        # run
+        run_experiment(opt, "iris", grid, MultiClassifier{Float64},
+            nfolds=10, tol=1e-6, ninner=10^4, nouter=50, mult=1.2,
+            intercept=true, kernel=nothing, strategy=OVO())
+    end
+end
 
-    #     # Train using the chosen MM algorithm
-    #     initialize_weights!(local_rng, classifier)
-    #     r = execute(ninner, nouter)
-        
-    #     # Test the classifier against the test data
-    #     targets_predict = classifier.(eachrow(Xtest))
-    #     score = sum(targets_predict .== targets_test)
-    #     percent = round(score / length(targets_test) * 100, digits=2)
+##### Example 3: spiral #####
+if "spiral300" in ARGS
+    println("Running 'spiral300' benchmark")
+    grid = [0.0; 0.5:0.05:0.95; 0.96:0.01:0.99]
+    for opt in (SD, MM)
+        # precompile
+        run_experiment(opt, "spiral300", grid, BinaryClassifier{Float64},
+            nfolds=10, tol=1e-6, ninner=2, nouter=2, mult=1.2,
+            intercept=true, kernel=RBFKernel())
 
-    #     # Write to results file.
-    #     # write(results, "$(trial)\t$(score)\t$(percent)\t$(r.time)\n")
+        # run
+        run_experiment(opt, "spiral300", grid, BinaryClassifier{Float64},
+            nfolds=10, tol=1e-6, ninner=10^4, nouter=50, mult=1.2,
+            intercept=true, kernel=RBFKernel())
+    end
+end
 
-    #     # Close log file.
-    #     # close(io)
-    # end
+##### Example 4: letter-recognition #####
+if "letter-recognition" in ARGS
+    println("Running 'letter-recognition' benchmark")
+    grid = [i/16 for i in 0:15]
+    for opt in (SD, MM)
+        # precompile
+        run_experiment(opt, "letter-recognition", grid, MultiClassifier{Float64},
+            nfolds=10, tol=1e-4, ninner=2, nouter=2, mult=1.2,
+            intercept=true, kernel=nothing, strategy=OVO())
 
-    # Close file.
-    # redirect_stdout(original_stdout)
-    # close(results)
-# end
+        # run
+        run_experiment(opt, "letter-recognition", grid, MultiClassifier{Float64}, 
+            nfolds=10, tol=1e-4, ninner=10^5, nouter=50, mult=1.2,
+            intercept=true, kernel=nothing, strategy=OVO())
+    end
+end
+
+##### Example 5: MNIST-digits #####
+if "MNIST-digits" in ARGS
+    println("Running 'MNIST-digits' benchmark")
+    grid = [0.0; 0.5:0.05:0.95; 0.96:0.01:0.99]
+    for opt in (SD, MM)
+        # precompile
+        run_experiment(opt, "MNIST", grid, MultiClassifier{Float64},
+            intercept=true, nfolds=10, tol=1e-4, ninner=2, nouter=2, mult=1.2,
+            kernel=RBFKernel(), strategy=OVR())
+
+        # run
+        run_experiment(opt, "MNIST", grid, MultiClassifier{Float64},
+            nfolds=10, tol=1e-4, ninner=10^5, nouter=50, mult=1.2,
+            intercept=true, kernel=RBFKernel(), strategy=OVR())
+    end
+end

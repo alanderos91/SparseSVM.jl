@@ -184,10 +184,14 @@ function trainMM(classifier::BinaryClassifier, f, tol, k; kwargs...)
   trainMM!(classifier, A, f, tol, k; kwargs...)
 end
 
-function trainMM!(classifier::BinaryClassifier, A, f, tol, k; kwargs...)
+function trainMM!(classifier::BinaryClassifier, A, f, tol, k; verbose::Bool=false, kwargs...)
   data = classifier.data
   intercept = classifier.intercept
-  @time annealing!(f, classifier.weights, A, data.y, tol, k, intercept; kwargs...)
+  if verbose
+    @time annealing!(f, classifier.weights, A, data.y, tol, k, intercept; verbose=true, kwargs...)
+  else
+    annealing!(f, classifier.weights, A, data.y, tol, k, intercept; verbose=false, kwargs...)
+  end
 end
 
 abstract type MultiClassStrategy end
@@ -277,18 +281,55 @@ function (classifier::MultiClassifier{T})(x) where T
     error("Classification for strategy $(strategy) is not yet implemented.")
   end
   
-  prediction = classify(vote, LabelEnc.OneOfK)
-  return classifier.label[prediction]
+  l = classify(vote, LabelEnc.OneOfK)
+  return classifier.label[l]
 end
 
-function trainMM(classifier::MultiClassifier{T}, f, tol, k; kwargs...) where T
-  @time for svm in classifier.svm
-    label2target = svm.data.label2target
-    pos = label2target[one(T)]
-    neg = label2target[-one(T)]
-    println("Training $(pos) vs $(neg)")
-    println()
-    trainMM(svm, f, tol, k; kwargs...)
-    println()
+function trainMM(classifier::MultiClassifier{T,S,MCS,KF}, f, tol, k; kwargs...) where {T,S,MCS,KF}
+  if MCS <: OVR && KF <: Kernel
+    A = get_design_matrix(classifier.svm[1].data, classifier.svm[1].intercept)
+  else
+    A = [get_design_matrix(svm.data, svm.intercept) for svm in classifier.svm]
   end
+  trainMM!(classifier, A, f, tol, k; kwargs...)
+end
+
+function trainMM!(classifier::MultiClassifier{T}, A, f, tol, k;
+  fullsvd::Union{Nothing,Vector}=nothing,
+  verbose::Bool=false, kwargs...) where T  
+  # check if we have SVDs of design matrices
+  if fullsvd isa Nothing
+    Asvd = [nothing for _ in 1:length(classifier.svm)]
+  else
+    Asvd = fullsvd
+  end
+
+  # convergence metrics
+  total_iters = 0
+  total_obj = zero(T)
+  total_dist = zero(T)
+  M = length(classifier.svm)
+
+  if verbose
+    @time for (i, svm) in enumerate(classifier.svm)
+      label2target = svm.data.label2target
+      pos = label2target[one(T)]
+      neg = label2target[-one(T)]
+      println("Training $(pos) vs $(neg)")
+      println()
+      iters, obj, dist = trainMM!(svm, A[i], f, tol, k; fullsvd=Asvd[i], verbose=true, kwargs...)
+      total_iters += iters
+      total_obj += obj / M
+      total_dist += dist / M
+      println()
+    end
+  else
+    for (i, svm) in enumerate(classifier.svm)
+      iters, obj, dist = trainMM!(svm, A[i], f, tol, k; fullsvd=Asvd[i], verbose=false, kwargs...)
+      total_iters += iters
+      total_obj += obj / M
+      total_dist += dist / M
+    end
+  end
+  return total_iters, total_obj, total_dist
 end

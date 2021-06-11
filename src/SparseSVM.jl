@@ -134,6 +134,7 @@ function annealing!(f, b, A, y, tol, k, intercept;
   nouter::Int=10,
   rho_init::Real=1.0,
   fullsvd::Union{Nothing,SVD}=nothing,
+  verbose::Bool=false,
   )
   #
   init && randn!(b)
@@ -149,9 +150,13 @@ function annealing!(f, b, A, y, tol, k, intercept;
   end
 
   for n in 1:nouter
-    print(n,"  ")
     # solve problem for fixed rho
-    _, cur_iters, obj = @time f(b, A, y, rho, tol, k, intercept, extras, ninner=ninner)
+    if verbose
+      print(n,"  ")
+      _, cur_iters, obj = @time f(b, A, y, rho, tol, k, intercept, extras, ninner=ninner, verbose=true)
+    else
+      _, cur_iters, obj = f(b, A, y, rho, tol, k, intercept, extras, ninner=ninner, verbose=false)
+    end
 
     # if abs(old - obj) < tol * (old + 1)
     #   break
@@ -168,12 +173,14 @@ function annealing!(f, b, A, y, tol, k, intercept;
   pvec, idx = get_model_coefficients(p, intercept)
   project_sparsity_set!(pvec, idx, k)
   dist = norm(p - b) / sqrt(length(b))
-  print("\niters = ", iters)
-  print("\ndist  = ", dist)
-  print("\nobj   = ", obj)
-  print("\nTotal Time")
+  if verbose
+    print("\niters = ", iters)
+    print("\ndist  = ", dist)
+    print("\nobj   = ", obj)
+    print("\nTotal Time")
+  end
   copyto!(b, p)
-  return b, iters, obj, dist
+  return iters, obj, dist
 end
 
 export annealing, annealing!
@@ -195,7 +202,7 @@ Solve the distance-penalized SVM with fixed `rho` via steepest descent.
 
 This version updates the coefficient vector `b` and can be used with `annealing`.
 """
-function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, intercept::Bool, extras; ninner::Int=1000) where T <: AbstractFloat
+function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, intercept::Bool, extras; ninner::Int=1000, verbose::Bool=false) where T <: AbstractFloat
 #
   (m, n) = size(A)
   (obj, old, iters) = (zero(T), zero(T), 0)
@@ -243,7 +250,7 @@ function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol:
       old = obj
     end  
   end
-  print(iters,"  ",obj)
+  verbose && print(iters,"  ",obj)
   return b, iters, obj
 end
 
@@ -263,7 +270,7 @@ Solve the distance-penalized SVM with fixed `rho` via normal equations.
 
 This version updates the coefficient vector `b` and can be used with `annealing`.
 """
-function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, intercept::Bool, extras; ninner::Int=1000) where T <: AbstractFloat
+function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, intercept::Bool, extras; ninner::Int=1000, verbose::Bool=false) where T <: AbstractFloat
   (m, n) = size(A)
   (obj, old, iters) = (zero(T), zero(T), 0)
   p = copy(b) # for projection
@@ -338,7 +345,7 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
       old = obj
     end  
   end
-  print(iters,"  ",obj)
+  verbose && print(iters,"  ",obj)
   return b, iters, obj
 end
 
@@ -379,6 +386,7 @@ export sparse_direct, sparse_direct!, sparse_steepest, sparse_steepest!
 ##### CLASSIFICATION #####
 include("classifier.jl")
 
+export MultiClassStrategy, OVO, OVR
 export SVMBatch, BinaryClassifier, MultiClassifier, trainMM, trainMM!
 ##### END CLASSIFICATION #####
 

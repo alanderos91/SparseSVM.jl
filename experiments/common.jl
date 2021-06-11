@@ -12,10 +12,22 @@ function get_algorithm_func(opt::AlgOption)
 end
 
 make_classifier(::Type{C}, X, targets, refclass; kwargs...) where C<:MultiClassifier = C(X, targets; kwargs...)
-make_classifier(::Type{C}, X, targets, refclass; kwargs...) where C<:BinaryClassifier = C(X, targets, refclass; kwargs...)
+make_classifier(::Type{C}, X, targets, refclass; strategy::MultiClassStrategy=OVR(), kwargs...) where C<:BinaryClassifier = C(X, targets, refclass; kwargs...)
 
 initialize_weights!(local_rng, classifier::BinaryClassifier) = Random.randn!(local_rng, classifier.weights)
 initialize_weights!(local_rng, classifier::MultiClassifier) = foreach(svm -> initialize_weights!(local_rng, svm), classifier.svm)
+
+function get_A_and_SVD(classifier::MultiClassifier)
+    A = [SparseSVM.get_design_matrix(svm.data, svm.intercept) for svm in classifier.svm]
+    Asvd = [svd(Ai, full=true) for Ai in A]
+    return A, Asvd
+end
+
+function get_A_and_SVD(classifier::BinaryClassifier)
+    A = SparseSVM.get_design_matrix(classifier.data, classifier.intercept)
+    Asvd = svd(A, full=true)
+    return A, Asvd
+end
 
 mse(x, y) = mean( (x - y) .^ 2 )
 

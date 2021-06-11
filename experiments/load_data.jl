@@ -49,7 +49,8 @@ function load_data(fname; seed::Int=1234)
         end
     end
 
-    X = Matrix(data[:, colidx])
-
+    X = Matrix{Float64}(data[:, colidx])
+    rescale!(X, obsdim=1)
+    
     return X, Vector(data.Class)
 end
