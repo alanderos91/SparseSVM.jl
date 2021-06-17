@@ -31,14 +31,15 @@ function run_experiment(algorithm::AlgOption, dataset, grid, ctype=MultiClassifi
 
     # Process options
     f = get_algorithm_func(algorithm)
-    gridvals = sort(grid, rev=false) # iterate from least sparse to most sparse models
+    gridvals = sort!(unique(grid), rev=false) # iterate from least sparse to most sparse models
+    nvals = length(gridvals)
 
     # Open output file.
     results = open("experiments/$(dataset)/experiment3-$(string(algorithm)).out", "w")
     writedlm(results, ["fold" "sparsity" "k" "iterations" "objective" "distance" "train_accuracy" "validation_accuracy" "test_accuracy"])
 
     # run cross-validation
-    p = Progress(nfolds, 1, "Running CV... ")
+    p = Progress(nfolds*nvals, 1, "Running CV... ")
     for (j, fold) in enumerate(kfolds(cv_set, k=nfolds, obsdim=1))
         # get training set and validation set
         ((train_X, train_targets), (val_X, val_targets)) = fold
@@ -48,7 +49,7 @@ function run_experiment(algorithm::AlgOption, dataset, grid, ctype=MultiClassifi
         initialize_weights!(MersenneTwister(1903), classifier)
 
         # create SVD if needed
-        A, Asvd = get_A_and_SVD(classifier)
+        A, Asvd = SparseSVM.get_A_and_SVD(classifier)
 
         # follow path along sparsity sets
         for (i, s) in enumerate(gridvals)
@@ -65,9 +66,8 @@ function run_experiment(algorithm::AlgOption, dataset, grid, ctype=MultiClassifi
             test_acc = accuracy_score(classifier, test_X, test_targets)
 
             writedlm(results, Any[j s*100 k iters obj dist train_acc val_acc test_acc])
+            next!(p, showvalues=[(:fold, j), (:k, k)])
         end
-
-        next!(p, showvalues=[(:fold, j)])
     end
     close(results)
 
@@ -145,18 +145,19 @@ if "letter-recognition" in ARGS
 end
 
 ##### Example 5: MNIST-digits #####
-if "MNIST-digits" in ARGS
-    println("Running 'MNIST-digits' benchmark")
-    grid = [0.0; 0.5:0.05:0.95; 0.96:0.01:0.99]
-    for opt in (SD, MM)
-        # precompile
-        run_experiment(opt, "MNIST", grid, MultiClassifier{Float64},
-            intercept=true, nfolds=10, tol=1e-4, ninner=2, nouter=2, mult=1.2,
-            kernel=RBFKernel(), strategy=OVR())
+# if "MNIST-digits" in ARGS
+#     println("Running 'MNIST-digits' benchmark")
+#     grid = [0.0; 0.5:0.05:0.95; 0.96:0.01:0.99]
+#     # for opt in (SD, MM)
+#     for opt in (SD,) # MM algorithm requires too much memory
+#         # precompile
+#         run_experiment(opt, "MNIST", grid, MultiClassifier{Float64},
+#             intercept=true, nfolds=10, tol=1e-4, ninner=2, nouter=2, mult=1.2,
+#             kernel=RBFKernel(), strategy=OVO())
 
-        # run
-        run_experiment(opt, "MNIST", grid, MultiClassifier{Float64},
-            nfolds=10, tol=1e-4, ninner=10^5, nouter=50, mult=1.2,
-            intercept=true, kernel=RBFKernel(), strategy=OVR())
-    end
-end
+#         # run
+#         run_experiment(opt, "MNIST", grid, MultiClassifier{Float64},
+#             nfolds=10, tol=1e-4, ninner=10^5, nouter=50, mult=1.2,
+#             intercept=true, kernel=RBFKernel(), strategy=OVO())
+#     end
+# end

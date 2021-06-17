@@ -285,51 +285,87 @@ function (classifier::MultiClassifier{T})(x) where T
   return classifier.label[l]
 end
 
-function trainMM(classifier::MultiClassifier{T,S,MCS,KF}, f, tol, k; kwargs...) where {T,S,MCS,KF}
-  if MCS <: OVR && KF <: Kernel
-    A = get_design_matrix(classifier.svm[1].data, classifier.svm[1].intercept)
+function trainMM(classifier::MultiClassifier, f, tol, k;
+  verbose::Bool=false,
+  matrix=nothing,
+  fullsvd=nothing,
+  kwargs...
+  )
+  #
+  if matrix isa Nothing
+    Amat = ASVD = MaybeIndexable(nothing)
   else
-    A = [get_design_matrix(svm.data, svm.intercept) for svm in classifier.svm]
+    Amat = matrix
+    if fullsvd isa Nothing
+      ASVD = MaybeIndexable(nothing)
+    else
+      ASVD = [svd(A, full=true) for A in Amat]
+    end
   end
-  trainMM!(classifier, A, f, tol, k; kwargs...)
+  info = if verbose
+    @time trainMM!(classifier, Amat, f, tol, k; verbose=true, fullsvd=ASVD, kwargs...)
+  else
+    trainMM!(classifier, Amat, f, tol, k; verbose=false, fullsvd=ASVD, kwargs...)
+  end
+  return info # total_iters, total_obj, total_dist
 end
 
-function trainMM!(classifier::MultiClassifier{T}, A, f, tol, k;
-  fullsvd::Union{Nothing,Vector}=nothing,
-  verbose::Bool=false, kwargs...) where T  
-  # check if we have SVDs of design matrices
-  if fullsvd isa Nothing
-    Asvd = [nothing for _ in 1:length(classifier.svm)]
-  else
-    Asvd = fullsvd
-  end
-
-  # convergence metrics
+function trainMM!(classifier::MultiClassifier{T}, Amat, f, tol, k;
+  verbose::Bool=false,
+  fullsvd=MaybeIndexable(nothing),
+  kwargs...) where T
   total_iters = 0
   total_obj = zero(T)
   total_dist = zero(T)
   M = length(classifier.svm)
-
-  if verbose
-    @time for (i, svm) in enumerate(classifier.svm)
+  for (i, svm) in enumerate(classifier.svm)
+    if verbose
       label2target = svm.data.label2target
       pos = label2target[one(T)]
       neg = label2target[-one(T)]
       println("Training $(pos) vs $(neg)")
       println()
-      iters, obj, dist = trainMM!(svm, A[i], f, tol, k; fullsvd=Asvd[i], verbose=true, kwargs...)
-      total_iters += iters
-      total_obj += obj / M
-      total_dist += dist / M
-      println()
     end
-  else
-    for (i, svm) in enumerate(classifier.svm)
-      iters, obj, dist = trainMM!(svm, A[i], f, tol, k; fullsvd=Asvd[i], verbose=false, kwargs...)
-      total_iters += iters
-      total_obj += obj / M
-      total_dist += dist / M
+    # check if design matrix is already allocated
+    if Amat[i] isa Nothing
+      A = get_A(svm)
+    else
+      A = Amat[i]
     end
+    iters, obj, dist = trainMM!(svm, A, f, tol, k; verbose=verbose, fullsvd=fullsvd[i], kwargs...)
+    total_iters += iters
+    total_obj += obj / M
+    total_dist += dist / M
+    verbose && println()
   end
   return total_iters, total_obj, total_dist
 end
+
+##### UTILS #####
+
+get_A(c::BinaryClassifier) = get_design_matrix(c.data, c.intercept)
+
+function get_A_and_SVD(c::BinaryClassifier)
+    A = get_A(c)
+    Asvd = svd(A, full=true)
+    return A, Asvd
+end
+
+get_A(c::MultiClassifier) = get_A.(c.svm)
+
+function get_A_and_SVD(c::MultiClassifier)
+  A = get_A(c)
+  Asvd = [svd(Ai, full=true) for Ai in A]
+  return A, Asvd
+end
+
+import Base: getindex
+
+struct MaybeIndexable{T,VT<:Union{Nothing,AbstractVector{T}}}
+  data::VT
+end
+
+MaybeIndexable(::Nothing) = MaybeIndexable{Nothing,Nothing}(nothing)
+
+Base.getindex(x::MaybeIndexable, i) = x.data[i]
+Base.getindex(::MaybeIndexable{Nothing}, i) = nothing
