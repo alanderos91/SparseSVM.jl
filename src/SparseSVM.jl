@@ -1,6 +1,5 @@
 module SparseSVM
-using CSV: makeunique
-using DataDeps, CSV, DataFrames
+using DataDeps, CSV, DataFrames, CodecZlib
 using MLDataUtils
 using KernelFunctions, LinearAlgebra, Random
 
@@ -25,30 +24,55 @@ function __init__()
 end
 
 function dataset(str)
+  # Locate dataset file.
   dataset_path = @datadep_str str
-  CSV.read(joinpath(dataset_path, "data.csv"), DataFrame, header=true)
+  file = readdir(dataset_path)
+  index = findfirst(x -> occursin("data.", x), file)
+  if index isa Int
+    dataset_file = joinpath(dataset_path, file[index])
+  else # is this unreachable?
+    error("Failed to locate a data.* file in $(dataset_path)")
+  end
+
+  # Read dataset file as a DataFrame.
+  df = if splitext(dataset_file)[2] == ".csv"
+    CSV.read(dataset_file, DataFrame)
+  else # assume .csv.gz
+    open(GzipDecompressorStream, dataset_file, "r") do stream
+      CSV.read(stream, DataFrame)
+    end
+  end
+  return df
 end
 
-function process_dataset(path; target_index=-1, feature_indices=1:0)
-  # Read the dataset.
-  input_df = CSV.read(path, DataFrame)
+function process_dataset(path::AbstractString; header=false, kwargs...)
+  input_df = CSV.read(path, DataFrame, header=header)
+  process_dataset(input_df; kwargs...)
+  rm(path)
+end
 
-  # Build output DataFrame column by column, using xi as column names.
+function process_dataset(input_df::DataFrame;
+  target_index=-1,
+  feature_indices=1:0,
+  ext=".csv")
+  # Build output DataFrame.
   output_df = DataFrame()
-  output_cols = Symbol[]
-
-  # Make the first column the target column.
   output_df.target = input_df[!, target_index]
-  push!(output_cols, :target)
-  for i in feature_indices
-    push!(output_cols, Symbol("x", i))
-    output_df = hcat(output_df, input_df[!, i], makeunique=true)
-  end
+  output_df = hcat(output_df, input_df[!, feature_indices], makeunique=true)
+  output_cols = [ :target; [Symbol("x", n) for n in eachindex(feature_indices)] ]
   rename!(output_df, output_cols)
 
   # Write to disk.
-  output_path = joinpath(dirname(path), "data.csv")
-  CSV.write(output_path, output_df, delim=',', writeheader=true)
+  output_path = "data" * ext
+  if ext == ".csv"
+    CSV.write(output_path, output_df, delim=',', writeheader=true)
+  elseif ext == ".csv.gz"
+    open(GzipCompressorStream, output_path, "w") do stream
+      CSV.write(stream, output_df, delim=",", writeheader=true)
+    end
+  else
+    error("Unknown file extension option '$(ext)'")
+  end
 end
 
 ##### OBJECTIVE #####
