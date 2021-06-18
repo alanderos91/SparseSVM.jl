@@ -1,6 +1,55 @@
 module SparseSVM
+using CSV: makeunique
+using DataDeps, CSV, DataFrames
 using MLDataUtils
 using KernelFunctions, LinearAlgebra, Random
+
+##### DATA #####
+
+#=
+Uses DataDeps to download data as needed.
+Inspired by UCIData.jl: https://github.com/JackDunnNZ/UCIData.jl
+=#
+
+const DATA_DIR = joinpath(@__DIR__, "data")
+
+"""
+List available datasets in SparseSVM.
+"""
+list_datasets() = map(x -> splitext(x)[1], readdir(DATA_DIR))
+
+function __init__()
+  for dataset in list_datasets()
+    include(joinpath(DATA_DIR, dataset * ".jl"))
+  end
+end
+
+function dataset(str)
+  dataset_path = @datadep_str str
+  CSV.read(joinpath(dataset_path, "data.csv"), DataFrame, header=true)
+end
+
+function process_dataset(path; target_index=-1, feature_indices=1:0)
+  # Read the dataset.
+  input_df = CSV.read(path, DataFrame)
+
+  # Build output DataFrame column by column, using xi as column names.
+  output_df = DataFrame()
+  output_cols = Symbol[]
+
+  # Make the first column the target column.
+  output_df.target = input_df[!, target_index]
+  push!(output_cols, :target)
+  for i in feature_indices
+    push!(output_cols, Symbol("x", i))
+    output_df = hcat(output_df, input_df[!, i], makeunique=true)
+  end
+  rename!(output_df, output_cols)
+
+  # Write to disk.
+  output_path = joinpath(dirname(path), "data.csv")
+  CSV.write(output_path, output_df, delim=',', writeheader=true)
+end
 
 ##### OBJECTIVE #####
 function eval_objective(Ab::AbstractVector, y, b, p, rho)
