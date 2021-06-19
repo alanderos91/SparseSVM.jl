@@ -13,7 +13,7 @@ register(DataDep(
   Classes:      3
   """,
   "script", # nothing to download
-  "abe3846fe75d15bb86985ab61d8b94112e4230fa4db732a56018a76146b5e946";
+  "51d3cf8d223edcacb65db752ff3b0487722951b6e00cb566c3e41a574189c20e";
   fetch_method=function(unused, localdir)
     # Parameters
     N           = 1000
