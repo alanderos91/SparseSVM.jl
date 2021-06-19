@@ -45,8 +45,8 @@ function dataset(str)
   return df
 end
 
-function process_dataset(path::AbstractString; header=false, kwargs...)
-  input_df = CSV.read(path, DataFrame, header=header)
+function process_dataset(path::AbstractString; header=false, missingstrings="", kwargs...)
+  input_df = CSV.read(path, DataFrame, header=header, missingstrings=missingstrings)
   process_dataset(input_df; kwargs...)
   rm(path)
 end
@@ -61,6 +61,7 @@ function process_dataset(input_df::DataFrame;
   output_df = hcat(output_df, input_df[!, feature_indices], makeunique=true)
   output_cols = [ :target; [Symbol("x", n) for n in eachindex(feature_indices)] ]
   rename!(output_df, output_cols)
+  dropmissing!(output_df)
 
   # Write to disk.
   output_path = "data" * ext
@@ -250,7 +251,7 @@ function annealing!(f, b, A, y, tol, k, intercept;
     print("\niters = ", iters)
     print("\ndist  = ", dist)
     print("\nobj   = ", obj)
-    print("\nTotal Time")
+    print("\nTotal Time: ")
   end
   copyto!(b, p)
   return iters, obj, dist
