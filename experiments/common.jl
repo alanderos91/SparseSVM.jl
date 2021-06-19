@@ -44,3 +44,16 @@ function support_vector_idx(classifier::MultiClassifier)
     return sort!(subset)
 end
 
+function _rescale_!(::Val{:none}, X)
+    X
+end
+
+function _rescale_!(::Val{:zscore}, X) # [-1, 1]
+    rescale!(X, obsdim=1)
+end
+
+function _rescale_!(::Val{:minmax}, X) # [0, 1]
+    xmin = minimum(X, dims=2)
+    xmax = maximum(X, dims=2)
+    @. X = (X - xmin) / (xmax - xmin)
+end

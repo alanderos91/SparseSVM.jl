@@ -2,7 +2,6 @@ using SparseSVM, MLDataUtils, KernelFunctions, LinearAlgebra
 using CSV, DataFrames, Random, Statistics
 using DelimitedFiles, ProgressMeter
 
-include("load_data.jl")
 include("common.jl")
 
 function accuracy_score(classifier, X, targets)
@@ -18,13 +17,27 @@ function run_experiment(algorithm::AlgOption, dataset, grid, ctype=MultiClassifi
     nouter::Int=20,
     ninner::Int=1000,
     mult::Real=1.5,
+    scale::Symbol=:zscore,
     seed::Int=1234,
     strategy::MultiClassStrategy=OVR(),
     kernel::Union{Nothing,Kernel}=nothing,
     intercept=false,
     )
     # Load the data
-    labeled_data = load_data(dataset, seed=seed)
+    df = SparseSVM.dataset(dataset)
+    y, X = Vector(df[!, 1]), Matrix{Float64}(df[!, 2:end])
+
+    if dataset == "TCGA-PANCAN-HiSeq"
+        # The TCGA data has a few columns full of 0s that should be dropped
+        idxs = findall(i -> isequal(0, maximum(X[:,i])), 1:size(X,2))
+        selected = setdiff(1:size(X,2), idxs)
+
+        # Limit to the first 10000 genes
+        X = X[:, selected[1:10000]]
+    end
+
+    _rescale_!(Val(scale), X)
+    labeled_data = (X, y)
     
     # Create the train and test data sets.
     cv_set, (test_X, test_targets) = splitobs(labeled_data, at=percent_train, obsdim=1)
@@ -111,17 +124,17 @@ if "iris" in ARGS
 end
 
 ##### Example 3: spiral #####
-if "spiral300" in ARGS
-    println("Running 'spiral300' benchmark")
+if "spiral" in ARGS
+    println("Running 'spiral' benchmark")
     grid = [0.0; 0.5:0.05:0.95; 0.96:0.01:0.99]
     for opt in (SD, MM)
         # precompile
-        run_experiment(opt, "spiral300", grid, BinaryClassifier{Float64},
+        run_experiment(opt, "spiral", grid, BinaryClassifier{Float64},
             nfolds=10, tol=1e-6, ninner=2, nouter=2, mult=1.2,
             intercept=true, kernel=RBFKernel())
 
         # run
-        run_experiment(opt, "spiral300", grid, BinaryClassifier{Float64},
+        run_experiment(opt, "spiral", grid, BinaryClassifier{Float64},
             nfolds=10, tol=1e-6, ninner=10^4, nouter=50, mult=1.2,
             intercept=true, kernel=RBFKernel())
     end
@@ -134,13 +147,77 @@ if "letter-recognition" in ARGS
     for opt in (SD, MM)
         # precompile
         run_experiment(opt, "letter-recognition", grid, MultiClassifier{Float64},
-            nfolds=10, tol=1e-4, ninner=2, nouter=2, mult=1.2,
+            nfolds=10, tol=1e-4, ninner=2, nouter=2, mult=1.2, scale=:minmax,
             intercept=true, kernel=nothing, strategy=OVO())
 
         # run
         run_experiment(opt, "letter-recognition", grid, MultiClassifier{Float64}, 
-            nfolds=10, tol=1e-4, ninner=10^5, nouter=50, mult=1.2,
+            nfolds=10, tol=1e-4, ninner=10^5, nouter=50, mult=1.2, scale=:minmax,
             intercept=true, kernel=nothing, strategy=OVO())
+    end
+end
+
+if "breast-cancer-wisconsin" in ARGS
+    println("Running 'breast-cancer-wisconsin' benchmark")
+    grid = [i/10 for i in 0:9]
+    for opt in (SD, MM)
+        # precompile
+        run_experiment(opt, "breast-cancer-wisconsin", grid, BinaryClassifier{Float64},
+            nfolds=10, tol=1e-4, ninner=2, nouter=2, mult=1.2, scale=:none,
+            intercept=true, kernel=nothing)
+
+        # run
+        run_experiment(opt, "breast-cancer-wisconsin", grid, BinaryClassifier{Float64}, 
+            nfolds=10, tol=1e-4, ninner=10^5, nouter=50, mult=1.2, scale=:none,
+            intercept=true, kernel=nothing)
+    end
+end
+
+if "splice" in ARGS
+    println("Running 'splice' benchmark")
+    grid = [0.0; 0.5:0.05:0.95; 0.96:0.01:0.99]
+    for opt in (SD, MM)
+        # precompile
+        run_experiment(opt, "splice", grid, MultiClassifier{Float64},
+            nfolds=10, tol=1e-4, ninner=2, nouter=2, mult=1.1, scale=:minmax,
+            intercept=true, kernel=nothing, strategy=OVO())
+
+        # run
+        run_experiment(opt, "splice", grid, MultiClassifier{Float64}, 
+            nfolds=10, tol=1e-4, ninner=10^5, nouter=100, mult=1.1, scale=:minmax,
+            intercept=true, kernel=nothing, strategy=OVO())
+    end
+end
+
+if "TCGA-PANCAN-HiSeq" in ARGS
+    println("Running 'TCGA-PANCAN-HiSeq' benchmark")
+    grid = [0.0; 0.5:0.05:0.95; 0.96:0.01:0.99]
+    for opt in (SD, MM)
+        # precompile
+        run_experiment(opt, "TCGA-PANCAN-HiSeq", grid, MultiClassifier{Float64},
+            nfolds=10, tol=1e-6, ninner=2, nouter=2, mult=1.05, scale=:minmax,
+            intercept=true, kernel=nothing, strategy=OVO())
+
+        # run
+        run_experiment(opt, "TCGA-PANCAN-HiSeq", grid, MultiClassifier{Float64}, 
+            nfolds=10, tol=1e-6, ninner=10^5, nouter=200, mult=1.05, scale=:minmax,
+            intercept=true, kernel=nothing, strategy=OVO())
+    end
+end
+
+if "optdigits" in ARGS
+    println("Running 'optdigits' benchmark")
+    grid = [0.0; 0.5:0.05:0.95; 0.96:0.01:0.99]
+    for opt in (SD, MM)
+        # precompile
+        run_experiment(opt, "optdigits", grid, MultiClassifier{Float64},
+            nfolds=10, tol=1e-4, ninner=2, nouter=2, mult=1.2, scale=:none,
+            intercept=true, kernel=nothing, strategy=OVO(), percent_train=0.68)
+
+        # run
+        run_experiment(opt, "optdigits", grid, MultiClassifier{Float64}, 
+            nfolds=10, tol=1e-4, ninner=10^5, nouter=50, mult=1.2, scale=:none,
+            intercept=true, kernel=nothing, strategy=OVO(), percent_train=0.68)
     end
 end
 
