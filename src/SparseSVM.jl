@@ -1,4 +1,5 @@
 module SparseSVM
+using DataFrames: copy, copyto!
 using DataDeps, CSV, DataFrames, CodecZlib
 using MLDataUtils
 using KernelFunctions, LinearAlgebra, Random
@@ -77,21 +78,21 @@ function process_dataset(input_df::DataFrame;
 end
 
 ##### OBJECTIVE #####
-function eval_objective(Ab::AbstractVector, y, b, p, rho)
+function eval_objective(Ab::AbstractVector, y, b, p, rho, k, intercept)
   T = eltype(Ab)
-  m, n = length(y), length(b)
+  m = length(y)
   obj = zero(T)
-  for i in 1:n # rho * |P(b) - b|^2 contribution; can reduce to BLAS.axpby!
+  for i in eachindex(b) # rho * |P(b) - b|^2 contribution; can reduce to BLAS.axpby!
     obj = obj + (p[i] - b[i])^2
   end
-  obj = rho / n * obj
-  for i in 1:m # |z - A*b|^2 contribution
+  obj = rho * inv(k + intercept) * obj
+  for i in eachindex(y) # |z - A*b|^2 contribution
     obj = obj + max(one(T) - y[i] * Ab[i], zero(T))^2 / m
   end
-  return obj
+  return obj / 2
 end
 
-eval_objective(A::AbstractMatrix, y, b, p, rho) = eval_objective(A*b, y, b, p, rho)
+eval_objective(A::AbstractMatrix, y, b, p, rho, k, intercept) = eval_objective(A*b, y, b, p, rho, k, intercept)
 ##### END OBJECTIVE #####
 
 ##### PROJECTIONS ######
@@ -219,6 +220,8 @@ function annealing!(f, b, A, y, tol, k, intercept;
   # check if svd(A) is needed
   if f isa typeof(sparse_direct!)
     extras = alloc_svd_and_extras(A, fullsvd=fullsvd)
+  elseif f isa typeof(sparse_direct_parallel!)
+    extras = alloc_svd_and_extras2(A, y)
   else
     extras = nothing
   end
@@ -243,17 +246,32 @@ function annealing!(f, b, A, y, tol, k, intercept;
     # update according to annealing schedule
     rho = mult * rho
   end
-  p = copy(b)
-  pvec, idx = get_model_coefficients(p, intercept)
-  project_sparsity_set!(pvec, idx, k)
-  dist = norm(p - b) / sqrt(length(b))
+
+  if b isa Vector
+    p = copy(b)
+    pvec, idx = get_model_coefficients(p, intercept)
+    project_sparsity_set!(pvec, idx, k)
+    dist = norm(p - b) / sqrt(k + intercept)
+    copyto!(b, p)
+  else
+    @views p = copy(b[:,1])
+    pvec, idx = get_model_coefficients(p, intercept)
+    dist = zero(eltype(p))
+    for j in axes(b, 2)
+      @views b_j = b[:,j]
+      copyto!(p, b_j)
+      project_sparsity_set!(pvec, idx, k)
+      dist = dist + norm(p - b_j) / sqrt(k + intercept)
+      copyto!(b_j, p)
+    end
+  end
+
   if verbose
     print("\niters = ", iters)
     print("\ndist  = ", dist)
     print("\nobj   = ", obj)
     print("\nTotal Time: ")
   end
-  copyto!(b, p)
   return iters, obj, dist
 end
 
@@ -286,7 +304,7 @@ function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol:
   z = zeros(T, m)
   Ab = A * b
   project_sparsity_set!(pvec, idx, k)
-  old = eval_objective(Ab, y, b, p, rho)
+  old = eval_objective(Ab, y, b, p, rho, k, intercept)
   for iter = 1:ninner
     iters = iters + 1
     @. grad = rho / (k+intercept) * (b - p) # penalty contribution
@@ -305,7 +323,7 @@ function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol:
       copyto!(p, b)
       project_sparsity_set!(pvec, idx, k)
       mul!(Ab, A, b)
-      obj = eval_objective(Ab, y, b, p, rho)
+      obj = eval_objective(Ab, y, b, p, rho, k, intercept)
       if obj < old
         break
       else
@@ -345,82 +363,90 @@ Solve the distance-penalized SVM with fixed `rho` via normal equations.
 This version updates the coefficient vector `b` and can be used with `annealing`.
 """
 function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, intercept::Bool, extras; ninner::Int=1000, verbose::Bool=false) where T <: AbstractFloat
-  (m, n) = size(A)
   (obj, old, iters) = (zero(T), zero(T), 0)
   p = copy(b) # for projection
   (pvec, idx) = get_model_coefficients(p, intercept)
-
+  
   # unpack
-  U, s, V, S = extras.U, extras.s, extras.V, extras.S
-  z, d1 = extras.z, extras.d1
-  buf1, buf2 = extras.buf1, extras.buf2
+  U, s, V = extras.U, extras.s, extras.V
+  z = extras.z
   b_old = extras.b_old
-
-  # Constants
-  for i in eachindex(s)
-    d1[i] = inv(s[i]^2/m + rho/(k+intercept))
-  end
-
+  
+  # initialize
   Ab = A * b
-
+  
   # initialize projection
   project_sparsity_set!(pvec, idx, k)
-
+  
   # initialize objective
-  old = eval_objective(Ab, y, b, p, rho)
-
+  old = eval_objective(Ab, y, b, p, rho, k, intercept)
+  
   # initialize worker array for Nesterov acceleration
   copyto!(b_old, b)
-
+  
   for iter = 1:ninner
-    iters = iters + 1
-    
-    # update estimates
-    @inbounds for i in eachindex(z)
-      c = y[i]*Ab[i]
-      if c ≤ 1
-        z[i] = y[i]
-      else
-        z[i] = Ab[i]
+      iters = iters + 1
+      
+      # Update estimates
+      compute_z!(z, Ab, y)
+      update_beta!(b, U, s, V, z, p, rho / (k + intercept))
+      
+      # Nesterov acceleration
+      γ = (iter - 1) / (iter + 2 - 1)
+      @inbounds for i in eachindex(b)
+          xi = b[i]
+          yi = b_old[i]
+          zi = xi + γ * (xi - yi)
+          b_old[i] = xi
+          b[i] = zi
       end
-    end
-    # b = V * D * S' * U' * z
-    mul!(buf1, U', z)
-    mul!(buf2, S', buf1)
-    lmul!(Diagonal(d1), buf2)
-    mul!(b, V, buf2)
-
-    # b = b + rho * (V * D * V' * p)
-    mul!(buf2, V', p)
-    lmul!(Diagonal(d1), buf2)
-    mul!(b, V, buf2, rho/(k+intercept), 1/m)
-
-    # Nesterov acceleration
-    γ = (iter - 1) / (iter + 2 - 1)
-    @inbounds for i in eachindex(b)
-      xi = b[i]
-      yi = b_old[i]
-      zi = xi + γ * (xi - yi)
-      b_old[i] = xi
-      b[i] = zi
-    end
-
-    # update objective
-    copyto!(p, b)
-    project_sparsity_set!(pvec, idx, k)
-    mul!(Ab, A, b)
-    obj = eval_objective(Ab, y, b, p, rho)
-    # if iter <= 10 || mod(iter, 10) == 0 
-    #   println("iter = ",iter," obj = ",obj)
-    # end
-    if  abs(old - obj) < tol * (old + one(T)) # norm(grad) < tol
-      break
-    else
-      old = obj
-    end  
+      
+      # update objective
+      copyto!(p, b)
+      project_sparsity_set!(pvec, idx, k)
+      mul!(Ab, A, b)
+      obj = eval_objective(Ab, y, b, p, rho, k, intercept)
+      # if iter <= 10 || mod(iter, 10) == 0 
+      #   println("iter = ",iter," obj = ",obj)
+      # end
+      if  abs(old - obj) < tol * (old + one(T)) # norm(grad) < tol
+          break
+      else
+          old = obj
+      end  
   end
   verbose && print(iters,"  ",obj)
   return b, iters, obj
+end
+
+function compute_z!(z, Ab, y)
+  @inbounds for i in eachindex(z)
+      c = y[i]*Ab[i]
+      if c ≤ 1
+          z[i] = y[i]
+      else
+          z[i] = Ab[i]
+      end
+  end
+end
+
+function accumulate_beta!(b, u, s, v, z, p, rho)
+  m = length(b)
+  uz = dot(u, z)
+  vp = dot(v, p)
+  
+  c1 = s/m / (s^2/m + rho)
+  c2 = s^2/m / (s^2/m + rho)
+  c3 = c1 * uz - c2 * vp
+
+  axpy!(c3, v, b)
+end
+
+function update_beta!(b, U, s, V, z, p, rho)
+  copyto!(b, p)
+  @views for i in eachindex(s)
+      accumulate_beta!(b, U[:,i], s[i], V[:,i], z, p, rho)
+  end
 end
 
 """
@@ -431,26 +457,15 @@ function alloc_svd_and_extras(A; fullsvd::Union{Nothing,SVD}=nothing)
   if fullsvd isa SVD
     Asvd = fullsvd
   else
-    Asvd = svd(A, full=true)
+    Asvd = svd(A)
   end
   U = Asvd.U # left singular vectors
   s = Asvd.S # singular values
   V = Asvd.V # right singular vectors
+  z = zeros(T, size(A, 1)) # stores yᵢ * (Xb)ᵢ or yᵢ
+  b_old = zeros(size(A, 2))
 
-  (m, n) = size(A)
-
-  if m ≥ n
-    S = [Diagonal(s); zeros(m-n, n)]
-  else
-    S = [Diagonal(s) zeros(m, n-m)]
-  end
-
-  z = zeros(T, m)             # stores yᵢ * (Xb)ᵢ or yᵢ
-  d1 = zeros(T, size(S, 2))   # for Diagonal matrix 1 / (sᵢ² + rho)
-  buf1 = zeros(T, size(U, 1)) # for mat-vec multiply
-  buf2 = zeros(T, size(V, 2)) # for mat-vec multiply
-
-  extras = (U=U, s=s, V=V, S=S, z=z, d1=d1, buf1=buf1, buf2=buf2, b_old=zeros(n))
+  extras = (U=U, s=s, V=V, z=z, b_old=b_old)
   return extras
 end
 
