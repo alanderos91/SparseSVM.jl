@@ -174,6 +174,27 @@ end
 ##### END PROJECTIONS #####
 
 ##### MAIN DRIVER #####
+function _init_weights_!(b, X, y, intercept)
+  m, n = size(X)
+  idx = ifelse(intercept, 1:n-1, 1:n)
+  y_bar = sum(y) / m
+  for j in idx
+    @views x = X[:, j]
+    x_bar = sum(x) / m
+    A = zero(eltype(b))
+    B = zero(eltype(b))
+    for i in 1:m
+      A += (x[i] - x_bar) * (y[i] - y_bar)
+      B += (x[i] - x_bar) ^2
+    end
+    b[j] = A / B
+  end
+  if intercept
+    b[end] = y_bar
+  end
+  return b
+end
+
 """
 Solve the distance-penalized SVM using algorithm `f` by slowly annealing the
 distance penalty.
@@ -212,7 +233,7 @@ function annealing!(f, b, A, y, tol, k, intercept;
   verbose::Bool=false,
   )
   #
-  init && randn!(b)
+  init && _init_weights_!(b, A, y, intercept)
   rho = rho_init
   T = eltype(A) # should be more careful here to make sure BLAS works correctly
   (obj, old, iters) = (zero(T), zero(T), 0)
@@ -366,7 +387,7 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
   (obj, old, iters) = (zero(T), zero(T), 0)
   p = copy(b) # for projection
   (pvec, idx) = get_model_coefficients(p, intercept)
-  
+
   # unpack
   U, s, V = extras.U, extras.s, extras.V
   z = extras.z
