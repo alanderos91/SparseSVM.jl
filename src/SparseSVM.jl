@@ -241,8 +241,6 @@ function annealing!(f, b, A, y, tol, k, intercept;
   # check if svd(A) is needed
   if f isa typeof(sparse_direct!)
     extras = alloc_svd_and_extras(A, fullsvd=fullsvd)
-  elseif f isa typeof(sparse_direct_parallel!)
-    extras = alloc_svd_and_extras2(A, y)
   else
     extras = nothing
   end
