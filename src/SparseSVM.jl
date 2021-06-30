@@ -14,6 +14,8 @@ Inspired by UCIData.jl: https://github.com/JackDunnNZ/UCIData.jl
 const DATA_DIR = joinpath(@__DIR__, "data")
 
 """
+`list_datasets()`
+
 List available datasets in SparseSVM.
 """
 list_datasets() = map(x -> splitext(x)[1], readdir(DATA_DIR))
@@ -24,6 +26,13 @@ function __init__()
     end
 end
 
+"""
+`dataset(str)`
+
+Load a dataset named `str`, if available. Returns data as a `DataFrame` where
+the first column contains labels/targets and the remaining columns correspond to
+distinct features.
+"""
 function dataset(str)
     # Locate dataset file.
     dataset_path = @datadep_str str
@@ -78,6 +87,12 @@ function process_dataset(input_df::DataFrame;
 end
 
 ##### OBJECTIVE #####
+"""
+`eval_objective(Ab::AbstractVector, y, b, p, rho, k, intercept)`
+
+Evaluate $$\frac{1}{2} \left[ \frac{1}{m} \|y - A \beta\|^{2} + \frac{\rho}{n-k+1} \dist(b, S_{k})^{2} \right]$$.
+Assumes `Ab = A * b`. 
+"""
 function eval_objective(Ab::AbstractVector, y, b, p, rho, k, intercept)
     T = eltype(Ab)
     m, n = length(y), length(b)
@@ -92,6 +107,12 @@ function eval_objective(Ab::AbstractVector, y, b, p, rho, k, intercept)
     return obj / 2
 end
 
+"""
+`eval_objective(A::AbstractMatrix, y, b, p, rho, k, intercept)`
+
+Evaluate $$\frac{1}{2} \left[ \frac{1}{m} \|y - A \beta\|^{2} + \frac{\rho}{n-k+1} \dist(b, S_{k})^{2} \right]$$.
+Assumes `A` is the design matrix.
+"""
 eval_objective(A::AbstractMatrix, y, b, p, rho, k, intercept) = eval_objective(A*b, y, b, p, rho, k, intercept)
 ##### END OBJECTIVE #####
 
