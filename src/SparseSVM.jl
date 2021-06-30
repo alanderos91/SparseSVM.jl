@@ -100,7 +100,7 @@ function eval_objective(Ab::AbstractVector, y, b, p, rho, k, intercept)
     for i in eachindex(b) # rho * |P(b) - b|^2 contribution; can reduce to BLAS.axpby!
         obj = obj + (p[i] - b[i])^2
     end
-    obj = rho * inv(n -k + 1) * obj
+    obj = rho / (n - k + 1) * obj
     for i in eachindex(y) # |z - A*b|^2 contribution
         obj = obj + max(one(T) - y[i] * Ab[i], zero(T))^2 / m
     end
@@ -349,7 +349,7 @@ function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol:
     
     # initialize worker array for Nesterov acceleration
     b_old = copy(b)
-
+    nest_iter = 1
     for iter = 1:ninner
         iters = iters + 1
         @. grad = (b - p) # penalty contribution
@@ -362,12 +362,6 @@ function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol:
         s = dot(grad, grad) # optimal step size
         mul!(Ab, A, grad)
         t = dot(Ab, Ab)
-        # if s > 1e3
-        #     @show t
-        #     @show s
-        #     @show iter
-        #     error()
-        # end
         s = s / (1/m*t + rho/(n-k+1) * s + eps()) # add small bias to prevent NaN
         @. increment = -s * grad
         
@@ -402,17 +396,22 @@ function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol:
         if  has_converged
             break
         else
-            old = obj
-            
-            # Nesterov acceleration.
-            γ = (iter - 1) / (iter + 2 - 1)
-            @inbounds for i in eachindex(b)
-                xi = b[i]
-                yi = b_old[i]
-                zi = xi + γ * (xi - yi)
-                b_old[i] = xi
-                b[i] = zi
+            if obj > 2*old
+                copyto!(b_old, b)
+                nest_iter = 1
+            else            
+                # Nesterov acceleration.
+                γ = (nest_iter - 1) / (nest_iter + 2 - 1)
+                @inbounds for i in eachindex(b)
+                    xi = b[i]
+                    yi = b_old[i]
+                    zi = xi + γ * (xi - yi)
+                    b_old[i] = xi
+                    b[i] = zi
+                end
+                nest_iter += 1
             end
+            old = obj
             copyto!(p, b)
             project_sparsity_set!(pvec, idx, k)
         end
@@ -461,6 +460,7 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
     # initialize worker array for Nesterov acceleration
     copyto!(b_old, b)
     
+    nest_iter = 1
     for iter = 1:ninner
         iters = iters + 1
         
@@ -480,17 +480,22 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
         if  has_converged
             break
         else
-            old = obj
-            
-            # Nesterov acceleration
-            γ = (iter - 1) / (iter + 2 - 1)
-            @inbounds for i in eachindex(b)
-                xi = b[i]
-                yi = b_old[i]
-                zi = xi + γ * (xi - yi)
-                b_old[i] = xi
-                b[i] = zi
+            if obj > 2*old
+                copyto!(b_old, b)
+                nest_iter = 1
+            else            
+                # Nesterov acceleration.
+                γ = (nest_iter - 1) / (nest_iter + 2 - 1)
+                @inbounds for i in eachindex(b)
+                    xi = b[i]
+                    yi = b_old[i]
+                    zi = xi + γ * (xi - yi)
+                    b_old[i] = xi
+                    b[i] = zi
+                end
+                nest_iter += 1
             end
+            old = obj
             copyto!(p, b)
             project_sparsity_set!(pvec, idx, k)
         end  
