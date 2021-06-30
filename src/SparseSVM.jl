@@ -90,7 +90,7 @@ end
 """
 `eval_objective(Ab::AbstractVector, y, b, p, rho, k, intercept)`
 
-Evaluate $$\frac{1}{2} \left[ \frac{1}{m} \|y - A \beta\|^{2} + \frac{\rho}{n-k+1} \dist(b, S_{k})^{2} \right]$$.
+Evaluate ``\\frac{1}{2} \\left[ \\frac{1}{m} \\|y - A \\beta\\|^{2} + \\frac{\\rho}{n-k+1} \\dist(b, S_{k})^{2} \\right]``.
 Assumes `Ab = A * b`. 
 """
 function eval_objective(Ab::AbstractVector, y, b, p, rho, k, intercept)
@@ -110,7 +110,7 @@ end
 """
 `eval_objective(A::AbstractMatrix, y, b, p, rho, k, intercept)`
 
-Evaluate $$\frac{1}{2} \left[ \frac{1}{m} \|y - A \beta\|^{2} + \frac{\rho}{n-k+1} \dist(b, S_{k})^{2} \right]$$.
+Evaluate ``\\frac{1}{2} \\left[ \\frac{1}{m} \\|y - A \\beta\\|^{2} + \\frac{\\rho}{n-k+1} \\dist(b, S_{k})^{2} \\right]``.
 Assumes `A` is the design matrix.
 """
 eval_objective(A::AbstractMatrix, y, b, p, rho, k, intercept) = eval_objective(A*b, y, b, p, rho, k, intercept)
@@ -342,39 +342,57 @@ function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol:
     (grad, increment) = (zeros(T, n), zeros(T, n))
     p = copy(b) # for projection
     (pvec, idx) = get_model_coefficients(p, intercept)
-    b_old = zeros(size(A, 2))
     z = zeros(T, m)
     Ab = A * b
     project_sparsity_set!(pvec, idx, k)
     old = eval_objective(Ab, y, b, p, rho, k, intercept)
     
     # initialize worker array for Nesterov acceleration
-    copyto!(b_old, b)
-    
+    b_old = copy(b)
+
     for iter = 1:ninner
         iters = iters + 1
-        @. grad = rho / (n-k+1) * (b - p) # penalty contribution
+        @. grad = (b - p) # penalty contribution
         for i = 1:m
-            z[i] = - y[i] * max(one(T) - y[i] * Ab[i], zero(T))
+            # z[i] = - y[i] * max(one(T) - y[i] * Ab[i], zero(T))
+            c = y[i] * Ab[i]
+            z[i] = ifelse(c ≤ 1, Ab[i] - y[i], 0.0)
         end
-        BLAS.gemv!('T', 1/m, A, z, 1.0, grad)
-        s = norm(grad)^2 # optimal step size
+        mul!(grad, A', z, 1/m, rho / (n-k+1))
+        s = dot(grad, grad) # optimal step size
         mul!(Ab, A, grad)
-        t = 1/m * norm(Ab)^2
-        s = s / (t + rho/(n-k+1) * norm(grad)^2 + eps()) # add small bias to prevent NaN
-        @. increment = - s * grad
+        t = dot(Ab, Ab)
+        # if s > 1e3
+        #     @show t
+        #     @show s
+        #     @show iter
+        #     error()
+        # end
+        s = s / (1/m*t + rho/(n-k+1) * s + eps()) # add small bias to prevent NaN
+        @. increment = -s * grad
+        
+        @. b = b + increment
+        copyto!(p, b)
+        project_sparsity_set!(pvec, idx, k)
+        mul!(Ab, A, b)
+        obj = eval_objective(Ab, y, b, p, rho, k, intercept)
         # counter = 0
-        for step = 0:3 # step halving
-            @. b = b + increment
-            copyto!(p, b)
-            project_sparsity_set!(pvec, idx, k)
-            mul!(Ab, A, b)
-            obj = eval_objective(Ab, y, b, p, rho, k, intercept)
+        
+        # Apply step halving.
+        for _ in 0:3
             if obj < old
                 break
             else
+                # backtrack
                 @. b = b - increment
                 @. increment = 0.5 * increment
+
+                # move forward
+                @. b = b + increment
+                copyto!(p, b)
+                project_sparsity_set!(pvec, idx, k)
+                mul!(Ab, A, b)
+                obj = eval_objective(Ab, y, b, p, rho, k, intercept)
                 # counter += 1
             end
         end
@@ -384,7 +402,6 @@ function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol:
         if  has_converged
             break
         else
-            # Update objective.
             old = obj
             
             # Nesterov acceleration.
@@ -396,6 +413,8 @@ function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol:
                 b_old[i] = xi
                 b[i] = zi
             end
+            copyto!(p, b)
+            project_sparsity_set!(pvec, idx, k)
         end
         
     end
@@ -472,6 +491,8 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
                 b_old[i] = xi
                 b[i] = zi
             end
+            copyto!(p, b)
+            project_sparsity_set!(pvec, idx, k)
         end  
     end
     verbose && print(iters,"  ",obj)
