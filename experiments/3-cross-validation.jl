@@ -18,7 +18,6 @@ function run_experiment(algorithm::AlgOption, dataset, grid, ctype=MultiClassifi
     ninner::Int=1000,
     mult::Real=1.5,
     scale::Symbol=:zscore,
-    seed::Int=1234,
     strategy::MultiClassStrategy=OVR(),
     kernel::Union{Nothing,Kernel}=nothing,
     intercept=false,
@@ -59,7 +58,7 @@ function run_experiment(algorithm::AlgOption, dataset, grid, ctype=MultiClassifi
     # Open output file.
     !isdir("results/$(dataset)") && mkdir("results/$(dataset)")
     results = open("results/$(dataset)/3-kernel=$(kernelopt)-$(string(algorithm)).out", "w")
-    writedlm(results, ["fold" "sparsity" "k" "iterations" "objective" "distance" "train_accuracy" "validation_accuracy" "test_accuracy"])
+    writedlm(results, ["fold" "sparsity" "iterations" "objective" "distance" "train_accuracy" "validation_accuracy" "test_accuracy"])
 
     # run cross-validation
     p = Progress(nfolds*nvals, 1, "Running CV... ")
@@ -69,27 +68,26 @@ function run_experiment(algorithm::AlgOption, dataset, grid, ctype=MultiClassifi
 
         # create classifier and use same initial point
         classifier = make_classifier(ctype, train_X, train_targets, first(train_targets), kernel=kernel, intercept=intercept, strategy=strategy)
-        initialize_weights!(MersenneTwister(1903), classifier)
 
-        # create SVD if needed
+        # create design matrix and SVD (if needed)
         A, Asvd = SparseSVM.get_A_and_SVD(classifier)
+
+        # initialize weights with univariate solution
+        initialize_weights!(classifier, A)
 
         # follow path along sparsity sets
         for (i, s) in enumerate(gridvals)
-            # compute sparsity parameter k
-            nparams = kernel isa Nothing ? size(train_X, 2) : size(train_X, 1)
-            k = round(Int, nparams*(1-s))
-
             # train classifier enforcing k nonzero parameters
-            iters, obj, dist = trainMM!(classifier, A, f, tol, k, fullsvd=Asvd, nouter=nouter, ninner=ninner, mult=mult, init=false, verbose=false)
+            iters, obj, dist = trainMM!(classifier, A, f, tol, s, fullsvd=Asvd, nouter=nouter, ninner=ninner, mult=mult, init=false, verbose=false)
 
             # compute evaluation metrics
             train_acc = accuracy_score(classifier, train_X, train_targets)
             val_acc = accuracy_score(classifier, val_X, val_targets)
             test_acc = accuracy_score(classifier, test_X, test_targets)
+            s_percent = round(s*100, sigdigits=4)
 
-            writedlm(results, Any[j s*100 k iters obj dist train_acc val_acc test_acc])
-            next!(p, showvalues=[(:fold, j), (:k, k)])
+            writedlm(results, Any[j s_percent iters obj dist train_acc val_acc test_acc])
+            next!(p, showvalues=[(:fold, j), (:sparsity, s_percent)])
         end
     end
     close(results)

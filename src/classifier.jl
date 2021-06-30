@@ -177,16 +177,17 @@ function (classifier::BinaryClassifier{T})(x) where T
     return data.label2target[prediction]
 end
 
-function trainMM(classifier::BinaryClassifier, f, tol, k; kwargs...)
+function trainMM(classifier::BinaryClassifier, f, tol, s; kwargs...)
     data = classifier.data
     intercept = classifier.intercept
     A = get_design_matrix(data, intercept)
-    trainMM!(classifier, A, f, tol, k; kwargs...)
+    trainMM!(classifier, A, f, tol, s; kwargs...)
 end
 
-function trainMM!(classifier::BinaryClassifier, A, f, tol, k; verbose::Bool=false, kwargs...)
+function trainMM!(classifier::BinaryClassifier, A, f, tol, s; verbose::Bool=false, kwargs...)
     data = classifier.data
     intercept = classifier.intercept
+    k = sparsity_to_k(s, size(A, 2)-intercept)
     if verbose
         @time annealing!(f, classifier.weights, A, data.y, tol, k, intercept; verbose=true, kwargs...)
     else
@@ -285,7 +286,7 @@ function (classifier::MultiClassifier{T})(x) where T
     return classifier.label[l]
 end
 
-function trainMM(classifier::MultiClassifier, f, tol, k;
+function trainMM(classifier::MultiClassifier, f, tol, s;
     verbose::Bool=false,
     matrix=nothing,
     fullsvd=nothing,
@@ -303,14 +304,14 @@ function trainMM(classifier::MultiClassifier, f, tol, k;
         end
     end
     info = if verbose
-        @time trainMM!(classifier, Amat, f, tol, k; verbose=true, fullsvd=ASVD, kwargs...)
+        @time trainMM!(classifier, Amat, f, tol, s; verbose=true, fullsvd=ASVD, kwargs...)
     else
-        trainMM!(classifier, Amat, f, tol, k; verbose=false, fullsvd=ASVD, kwargs...)
+        trainMM!(classifier, Amat, f, tol, s; verbose=false, fullsvd=ASVD, kwargs...)
     end
     return info # total_iters, total_obj, total_dist
 end
 
-function trainMM!(classifier::MultiClassifier{T}, Amat, f, tol, k;
+function trainMM!(classifier::MultiClassifier{T}, Amat, f, tol, s;
     verbose::Bool=false,
     fullsvd=MaybeIndexable(nothing),
     kwargs...) where T
@@ -332,7 +333,7 @@ function trainMM!(classifier::MultiClassifier{T}, Amat, f, tol, k;
         else
             A = Amat[i]
         end
-        iters, obj, dist = trainMM!(svm, A, f, tol, k; verbose=verbose, fullsvd=fullsvd[i], kwargs...)
+        iters, obj, dist = trainMM!(svm, A, f, tol, s; verbose=verbose, fullsvd=fullsvd[i], kwargs...)
         total_iters += iters
         total_obj += obj / M
         total_dist += dist / M
@@ -369,3 +370,8 @@ MaybeIndexable(::Nothing) = MaybeIndexable{Nothing,Nothing}(nothing)
 
 Base.getindex(x::MaybeIndexable, i) = x.data[i]
 Base.getindex(::MaybeIndexable{Nothing}, i) = nothing
+
+function sparsity_to_k(s, n)
+    abs(s) > 1 && error("Sparsity level must be between 0 and 1. Got: s = $(s) and n = $(n)")
+    return max(1, round(Int, n * (1-s)))
+end

@@ -14,8 +14,21 @@ end
 make_classifier(::Type{C}, X, targets, refclass; kwargs...) where C<:MultiClassifier = C(X, targets; kwargs...)
 make_classifier(::Type{C}, X, targets, refclass; strategy::MultiClassStrategy=OVR(), kwargs...) where C<:BinaryClassifier = C(X, targets, refclass; kwargs...)
 
-initialize_weights!(local_rng, classifier::BinaryClassifier) = Random.randn!(local_rng, classifier.weights)
-initialize_weights!(local_rng, classifier::MultiClassifier) = foreach(svm -> initialize_weights!(local_rng, svm), classifier.svm)
+function initialize_weights!(classifier::BinaryClassifier, A::AbstractMatrix)
+    y = classifier.data.y
+    weights = classifier.weights
+    intercept = classifier.intercept
+    SparseSVM._init_weights_!(weights, A, y, intercept)
+    return nothing
+end
+
+function initialize_weights!(classifier::MultiClassifier, A::Vector)
+    svm = classifier.svm
+    for i in eachindex(svm)
+        initialize_weights!(svm[i], A[i])
+    end
+    return nothing
+end
 
 mse(x, y) = mean( (x - y) .^ 2 )
 
