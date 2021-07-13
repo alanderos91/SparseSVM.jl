@@ -2,7 +2,7 @@ module SparseSVM
 using DataFrames: copy, copyto!
 using DataDeps, CSV, DataFrames, CodecZlib
 using MLDataUtils
-using KernelFunctions, LinearAlgebra, Random
+using KernelFunctions, LinearAlgebra, Random, Statistics
 
 ##### DATA #####
 
@@ -198,17 +198,17 @@ end
 function _init_weights_!(b, X, y, intercept)
     m, n = size(X)
     idx = ifelse(intercept, 1:n-1, 1:n)
-    y_bar = sum(y) / m
+    y_bar = mean(y)
     for j in idx
         @views x = X[:, j]
-        x_bar = sum(x) / m
+        x_bar = mean(x)
         A = zero(eltype(b))
         B = zero(eltype(b))
         for i in 1:m
             A += (x[i] - x_bar) * (y[i] - y_bar)
             B += (x[i] - x_bar) ^2
         end
-        b[j] = A / B
+        b[j] = B == 0 ? 1e-6*rand() : A / B
     end
     if intercept
         b[end] = y_bar
@@ -396,7 +396,7 @@ function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol:
         if  has_converged
             break
         else
-            if obj > 2*old
+            if obj > old
                 copyto!(b_old, b)
                 nest_iter = 1
             else            
@@ -480,10 +480,10 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
         if  has_converged
             break
         else
-            if obj > 2*old
+            if obj > old
                 copyto!(b_old, b)
                 nest_iter = 1
-            else            
+            else
                 # Nesterov acceleration.
                 γ = (nest_iter - 1) / (nest_iter + 2 - 1)
                 @inbounds for i in eachindex(b)

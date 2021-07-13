@@ -7,7 +7,7 @@ include("common.jl")
 function accuracy_score(classifier, X, targets)
     predictions = classifier.(eachrow(X))
     n = length(predictions)
-    return sum(predictions .== targets) / n * 100
+    return sum(predictions .== targets) / n
 end
 
 function run_experiment(algorithm::AlgOption, dataset, grid, ctype=MultiClassifier;
@@ -81,9 +81,9 @@ function run_experiment(algorithm::AlgOption, dataset, grid, ctype=MultiClassifi
             iters, obj, dist = trainMM!(classifier, A, f, tol, s, fullsvd=Asvd, nouter=nouter, ninner=ninner, mult=mult, init=false, verbose=false)
 
             # compute evaluation metrics
-            train_acc = accuracy_score(classifier, train_X, train_targets)
-            val_acc = accuracy_score(classifier, val_X, val_targets)
-            test_acc = accuracy_score(classifier, test_X, test_targets)
+            train_acc = round(accuracy_score(classifier, train_X, train_targets)*100, sigdigits=4)
+            val_acc = round(accuracy_score(classifier, val_X, val_targets)*100, sigdigits=4)
+            test_acc = round(accuracy_score(classifier, test_X, test_targets)*100, sigdigits=4)
             s_percent = round(s*100, sigdigits=4)
 
             writedlm(results, Any[j s_percent iters obj dist train_acc val_acc test_acc])
