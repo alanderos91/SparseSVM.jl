@@ -19,6 +19,12 @@ function initialize_weights!(classifier::BinaryClassifier, A::AbstractMatrix)
     weights = classifier.weights
     intercept = classifier.intercept
     SparseSVM._init_weights_!(weights, A, y, intercept)
+
+    # sanity checks
+    if any(isnan, weights)
+        error("Detected NaNs in computing univariate initial guess.")
+    end
+    
     return nothing
 end
 
@@ -28,6 +34,15 @@ function initialize_weights!(classifier::MultiClassifier, A::Vector)
         initialize_weights!(svm[i], A[i])
     end
     return nothing
+end
+
+function randomize_weights!(classifier::BinaryClassifier, rng)
+    Random.randn!(rng, classifier.weights)
+    return nothing
+end
+
+function randomize_weights!(classifier::MultiClassifier, rng)
+    foreach(svm -> randomize_weights!(svm, rng), classifier.svm)
 end
 
 mse(x, y) = mean( (x - y) .^ 2 )
