@@ -141,40 +141,35 @@ end
 "Create a `BinaryClassifier` assuming `Float64` arithmetic. See `BinaryClassifier{T}."
 BinaryClassifier(Xdata, targets, refclass; kwargs...) = BinaryClassifier{Float64}(Xdata, targets, refclass; kwargs...)
 
-function (classifier::BinaryClassifier{T})(x) where T
+function prediction(classifier::BinaryClassifier{T}, x) where T
     weights = classifier.weights
     data = classifier.data
+    intercept = classifier.intercept
     κ = kernelf(data)
     X = data.X
     y = data.y
 
     if κ isa Nothing
         # linear case
-        if classifier.intercept
-            @views β, β₀ = weights[1:end-1], weights[end]
-            fx = dot(x, β) + β₀
-        else
-            β = weights
-            fx = dot(x, β)
-        end
+        @views β, β₀ = weights[1:end-intercept], intercept*weights[end]
+        fx = dot(x, β) + β₀
     else
         # nonlinear case
         fx = zero(T)
-        if classifier.intercept
-            @views α, α₀ = weights[1:end-1], weights[end]
-            for (j, xj) in enumerate(eachrow(X))
-                fx = fx + α[j] * y[j] * κ(x, xj)
-            end
-            fx = fx + α₀
-        else
-            α = weights
-            for (j, xj) in enumerate(eachrow(X))
-                fx = fx + α[j] * y[j] * κ(x, xj)
-            end
+        @views α, α₀ = weights[1:end-intercept], intercept*weights[end]
+        for (j, xj) in enumerate(eachrow(X))
+            fx = fx + α[j] * y[j] * κ(x, xj)
         end
+        fx = fx + α₀
     end
-    prediction = classify(fx, LabelEnc.MarginBased(T))
-    return data.label2target[prediction]
+
+    return fx
+end
+
+function (classifier::BinaryClassifier{T})(x) where T
+    fx = prediction(classifier, x)
+    label = classify(fx, LabelEnc.MarginBased(T))
+    return classifier.data.label2target[label]
 end
 
 function trainMM(classifier::BinaryClassifier, f, tol, s; kwargs...)
@@ -257,25 +252,33 @@ end
 
 MultiClassifier(Xdata, targets; kwargs...) = MultiClassifier{Float64}(Xdata, targets; kwargs...)
 
+function prediction(classifier::MultiClassifier{T}, x) where T
+    fx = zeros(T, length(classifier.svm))
+    for (i, f) in enumerate(classifier.svm)
+        fx[i] = SparseSVM.prediction(f, x)
+    end
+    return fx
+end
+
 function (classifier::MultiClassifier{T})(x) where T
     vote, target2ind = classifier.votes, classifier.target2ind
     fill!(vote, 0)
 
     if classifier.strategy isa OVR # one versus rest
         for f in classifier.svm
-            prediction = f(x)
+            preclass = f(x)
             refclass = f.data.label2target[one(T)]
             
             # only cast vote when 
-            if prediction == refclass
-                k = target2ind[prediction]
+            if preclass == refclass
+                k = target2ind[preclass]
                 vote[k] += 1
             end
         end
     elseif classifier.strategy isa OVO # one versus one
         for f in classifier.svm
-            prediction = f(x)
-            k = target2ind[prediction]
+            preclass = f(x)
+            k = target2ind[preclass]
             vote[k] += 1
         end
     else
@@ -375,3 +378,28 @@ function sparsity_to_k(s, n)
     abs(s) > 1 && error("Sparsity level must be between 0 and 1. Got: s = $(s) and n = $(n)")
     return max(1, round(Int, n * (1-s)))
 end
+
+##### checking support vectors #####
+
+function get_support_vecs(classifier::BinaryClassifier)
+    if classifier.data.kernelf isa Nothing
+        # linear case: check violations
+        Ab = map(x -> prediction(classifier, x), eachrow(classifier.data.X))
+        idx = findall(classifier.data.y .* Ab .< 1)
+    else
+        # non-linear case: check for non-zero weights
+        intercept = classifier.intercept
+        idx = findall(!isequal(0), classifier.weights[1:end-intercept])
+    end
+    return sort!(idx)
+end
+
+function get_support_vecs(classifier::MultiClassifier)
+    idx = Int[]
+    for svm in classifier.svm
+        union!(idx, get_support_vecs(svm))
+    end
+    return sort!(idx)
+end
+
+count_support_vecs(classifier) = length(get_support_vecs(classifier))

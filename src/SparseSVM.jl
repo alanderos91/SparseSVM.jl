@@ -573,6 +573,7 @@ include("classifier.jl")
 
 export MultiClassStrategy, OVO, OVR
 export SVMBatch, BinaryClassifier, MultiClassifier, trainMM, trainMM!
+export get_support_vecs, count_support_vecs
 ##### END CLASSIFICATION #####
 
 end # end module
