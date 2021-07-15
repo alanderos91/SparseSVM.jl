@@ -445,13 +445,18 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
     
     # unpack
     U, s, V = extras.U, extras.s, extras.V
-    z = extras.z
+    z, buffer = extras.z, extras.buffer
     b_old = extras.b_old
     
     # initialize
-    Ab = A * b
+    Ab = buffer[1]; mul!(Ab, A, b)
+    d2 = buffer[2]
+    for i in eachindex(s)
+        d2[i] = (s[i] / m) / (s[i]^2 / m + rho)
+    end
+    btmp = buffer[3]
     D1 = Diagonal(s)
-    D2 = Diagonal( (1/m * s) ./ (1/m * (s .^ 2) .+ rho / (n-k+1)) )
+    D2 = Diagonal(d2)
     
     # initialize projection
     project_sparsity_set!(pvec, idx, k)
@@ -468,7 +473,7 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
         
         # Update estimates
         compute_z!(z, Ab, y)
-        update_beta!(b, p, U, V, D1, D2, z) # b == p after the update
+        update_beta!(b, btmp, U, V, D1, D2, z, p) # b == p after this update
         
         # update objective
         project_sparsity_set!(pvec, idx, k)
@@ -516,31 +521,23 @@ function compute_z!(z, Ab, y)
     end
 end
 
-function update_beta!(b, p, U, V, D1, D2, z)
-    # @show length(b)
-    # @show length(p)
-    # @show size(U)
-    # @show size(V)
-    # @show size(D1)
-    # @show size(D2)
-    # @show length(z)
+function update_beta!(b, btmp, U, V, D1, D2, z, p)
     r = size(D1, 1)
     U_block = view(U, :, 1:r)
     V_block = view(V, :, 1:r)
 
-    # b = Σ V' p
-    mul!(b, V_block', p)
-    lmul!(D1, b)
+    # btmp = Σ V' p
+    mul!(btmp, V_block', p)
+    lmul!(D1, btmp)
 
-    # b = U' z - b
-    mul!(b, U_block', z, 1.0, -1.0)
+    # btmp = U' z - btmp
+    mul!(btmp, U_block', z, 1.0, -1.0)
 
-    # # b = [ (1/m Σ² + ρI)⁻¹ 1/m Σ ] b
-    lmul!(D2, b)
+    # btmp = [ (1/m Σ² + ρI)⁻¹ 1/m Σ ] btmp
+    lmul!(D2, btmp)
 
-    # # p = p + V'b
-    mul!(p, V_block, b, 1.0, 1.0)
-
+    # b = p = p + V'b
+    mul!(p, V_block, btmp, 1.0, 1.0)
     copyto!(b, p)
 end
 
@@ -559,9 +556,13 @@ function alloc_svd_and_extras(A; fullsvd::Union{Nothing,SVD}=nothing)
     V = Asvd.V # right singular vectors
     z = zeros(T, size(A, 1)) # stores yᵢ * (Xb)ᵢ or yᵢ
     b_old = zeros(size(A, 2))
+
+    buffer = Vector{Vector{T}}(undef, 3)
+    buffer[1] = similar(A, axes(A, 1))  # for A * b
+    buffer[2] = similar(s)              # for diagonal a^2 Σ / (a^2 Σ^2 + b^2 I)
+    buffer[3] = similar(s)              # for updating β
     
-    extras = (U=U, s=s, V=V, z=z, b_old=b_old)
-    return extras
+    extras = (U=U, s=s, V=V, z=z, b_old=b_old, buffer=buffer)
 end
 
 export sparse_direct, sparse_direct!, sparse_steepest, sparse_steepest!

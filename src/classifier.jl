@@ -348,7 +348,7 @@ get_A(c::BinaryClassifier) = get_design_matrix(c.data, c.intercept)
 
 function get_A_and_SVD(c::BinaryClassifier)
     A = get_A(c)
-    Asvd = svd(A, full=true)
+    Asvd = svd(A)
     return A, Asvd
 end
 
@@ -356,7 +356,7 @@ get_A(c::MultiClassifier) = get_A.(c.svm)
 
 function get_A_and_SVD(c::MultiClassifier)
     A = get_A(c)
-    Asvd = [svd(Ai, full=true) for Ai in A]
+    Asvd = [svd(Ai) for Ai in A]
     return A, Asvd
 end
 
