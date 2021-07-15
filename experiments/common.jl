@@ -1,3 +1,6 @@
+# Make sure we set up BLAS threads correctly
+BLAS.set_num_threads(8)
+
 # Algorithm Option Definitions
 @enum AlgOption SD=1 MM=2
 

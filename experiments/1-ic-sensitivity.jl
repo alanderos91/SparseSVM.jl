@@ -90,9 +90,6 @@ function run_experiment(algorithm::AlgOption, dataset, ctype=MultiClassifier;
     close(results)
 end
 
-# Make sure we set up BLAS threads correctly
-BLAS.set_num_threads(10)
-
 ##### Example 1: synthetic #####
 if "synthetic" in ARGS
     println("Running 'synthetic' benchmark")
