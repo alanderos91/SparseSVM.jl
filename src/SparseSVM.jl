@@ -450,6 +450,8 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
     
     # initialize
     Ab = A * b
+    D1 = Diagonal(s)
+    D2 = Diagonal( (1/m * s) ./ (1/m * (s .^ 2) .+ rho / (n-k+1)) )
     
     # initialize projection
     project_sparsity_set!(pvec, idx, k)
@@ -466,10 +468,9 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
         
         # Update estimates
         compute_z!(z, Ab, y)
-        update_beta!(b, U, s, V, z, p, rho / (n-k+1))
+        update_beta!(b, p, U, V, D1, D2, z) # b == p after the update
         
         # update objective
-        copyto!(p, b)
         project_sparsity_set!(pvec, idx, k)
         mul!(Ab, A, b)
         obj = eval_objective(Ab, y, b, p, rho, k, intercept)
@@ -515,23 +516,32 @@ function compute_z!(z, Ab, y)
     end
 end
 
-function accumulate_beta!(b, u, s, v, z, p, rho)
-    m = length(b)
-    uz = dot(u, z)
-    vp = dot(v, p)
-    
-    c1 = s/m / (s^2/m + rho)
-    c2 = s^2/m / (s^2/m + rho)
-    c3 = c1 * uz - c2 * vp
-    
-    axpy!(c3, v, b)
-end
+function update_beta!(b, p, U, V, D1, D2, z)
+    # @show length(b)
+    # @show length(p)
+    # @show size(U)
+    # @show size(V)
+    # @show size(D1)
+    # @show size(D2)
+    # @show length(z)
+    r = size(D1, 1)
+    U_block = view(U, :, 1:r)
+    V_block = view(V, :, 1:r)
 
-function update_beta!(b, U, s, V, z, p, rho)
+    # b = Σ V' p
+    mul!(b, V_block', p)
+    lmul!(D1, b)
+
+    # b = U' z - b
+    mul!(b, U_block', z, 1.0, -1.0)
+
+    # # b = [ (1/m Σ² + ρI)⁻¹ 1/m Σ ] b
+    lmul!(D2, b)
+
+    # # p = p + V'b
+    mul!(p, V_block, b, 1.0, 1.0)
+
     copyto!(b, p)
-    @views for i in eachindex(s)
-        accumulate_beta!(b, U[:,i], s[i], V[:,i], z, p, rho)
-    end
 end
 
 """
