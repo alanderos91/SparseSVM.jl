@@ -4,12 +4,6 @@ using DelimitedFiles, ProgressMeter
 
 include("common.jl")
 
-function accuracy_score(classifier, X, targets)
-    predictions = classifier.(eachrow(X))
-    n = length(predictions)
-    return sum(predictions .== targets) / n
-end
-
 function run_experiment(algorithm::AlgOption, dataset, grid, ctype=MultiClassifier;
     nfolds::Int=10,
     percent_train::Real=0.8,

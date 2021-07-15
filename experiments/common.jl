@@ -45,6 +45,12 @@ function randomize_weights!(classifier::MultiClassifier, rng)
     foreach(svm -> randomize_weights!(svm, rng), classifier.svm)
 end
 
+function accuracy_score(classifier, X, targets)
+    predictions = classifier.(eachrow(X))
+    n = length(predictions)
+    return sum(predictions .== targets) / n
+end
+
 mse(x, y) = mean( (x - y) .^ 2 )
 
 function discovery_metrics(x, y)
