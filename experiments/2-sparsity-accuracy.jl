@@ -119,12 +119,12 @@ function run_experiment(fname, algorithm::AlgOption, grid;
 
     # Open file to write results on disk. Save settings on a separate log.
     dir = joinpath("results", "experiment2")
-    open(joinpath(dir, "$(fname).log"), "w") do io
+    open(joinpath(dir, "$(fname).log"), "w+") do io
         for (key, val) in options
             writedlm(io, [key val], '=')
         end
     end
-    results = open(joinpath(dir, "$(fname).out"), "w")
+    results = open(joinpath(dir, "$(fname).out"), "w+")
     writedlm(results, ["m" "n" "k0" "sparsity" "sv" "time" "iter" "obj" "dist" "MSE" "TP" "FP" "TN" "FN" "train_acc" "test_acc"])
 
     function write_result(classifier, s, result)
@@ -170,6 +170,7 @@ end
 
 # Options
 algorithms = (MM, SD)
+fnames = map(opt -> generate_filename(2, opt), algorithms)
 
 default_size = 500
 p = floor(Int, log10(default_size)) + 1
@@ -192,7 +193,6 @@ for opt in algorithms
     m = 100
     n = 100    
     fname = generate_filename(2, opt)
-    fname = "$(fname)-m=$(m)-n=$(n)-k0=$(k0)"
     run_experiment(fname, opt, sparsity_grid,
         m=100,
         n=100,
@@ -219,11 +219,8 @@ sparsity_grid = [
 ]
 
 # Case m > n: More samples than predictors.
-for opt in algorithms, m in size_grid
+for (opt, fname) in zip(algorithms, fnames), m in size_grid
     n = default_size
-    fname = generate_filename(2, opt)
-    fname = "$(fname)-m=$(m)-n=$(n)-k0=$(k0)"
-
     run_experiment(fname, opt, sparsity_grid,
         m=m,
         n=n,
@@ -241,11 +238,8 @@ for opt in algorithms, m in size_grid
 end
 
 # Case: m < n: More predictors than samples.
-for opt in algorithms, n in size_grid
+for (opt, fname) in zip(algorithms, fnames), n in size_grid
     m = default_size
-    fname = generate_filename(2, opt)
-    fname = "$(fname)-m=$(m)-n=$(n)-k0=$(k0)"
-
     run_experiment(fname, opt, sparsity_grid,
         m=m,
         n=n,
