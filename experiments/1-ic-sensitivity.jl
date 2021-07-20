@@ -1,10 +1,6 @@
-using SparseSVM, MLDataUtils, KernelFunctions, LinearAlgebra
-using CSV, DataFrames, Random, Statistics
-using DelimitedFiles, ProgressMeter
-
 include("common.jl")
 
-function run_experiment(algorithm::AlgOption, dataset, ctype=MultiClassifier;
+function run_experiment(fname, algorithm, dataset, ctype;
     ntrials::Int=100,
     percent_train::Real=0.8,
     tol::Real=1e-6,
@@ -15,8 +11,27 @@ function run_experiment(algorithm::AlgOption, dataset, ctype=MultiClassifier;
     scale::Symbol=:zscore,
     strategy=MultiClassStrategy=OVR(),
     kernel::Union{Nothing,Kernel}=nothing,
-    intercept=false,
+    intercept::Bool=false,
     )
+    # Put options into a list.
+    options = (
+        :fname => fname,
+        :algorithm => algorithm,
+        :dataset => dataset,
+        :ctype => ctype,
+        :ntrials => ntrials,
+        :percent_train => percent_train,
+        :tol => tol,
+        :s => s,
+        :nouter => nouter,
+        :ninner => ninner,
+        :mult => mult,
+        :scale => scale,
+        :strategy => strategy,
+        :kernel => kernel,
+        :intercept => intercept,
+    )
+
     # Load the data
     df = SparseSVM.dataset(dataset)
     y, X = Vector(df[!, 1]), Matrix{Float64}(df[!, 2:end])
@@ -39,54 +54,57 @@ function run_experiment(algorithm::AlgOption, dataset, ctype=MultiClassifier;
     # Process options
     f = get_algorithm_func(algorithm)
 
-    # Generate short name for kernel option.
-    if kernel isa RBFKernel
-        kernelopt = "RBF"
-    elseif kernel isa Nothing
-        kernelopt = "NONE"
-    else
-        error("Add short name for $(kernel).")
-    end
-
     # Initialize classifier.
     classifier = make_classifier(ctype, train_X, train_targets, first(train_targets),
         kernel=kernel, intercept=intercept, strategy=strategy)
-    local_rng = MersenneTwister(1903)
+    local_rng = StableRNG(1903)
 
-    # Create closure.
+    # Create closure to run trainMM.
     A, Asvd = SparseSVM.get_A_and_SVD(classifier)
     execute(ninner, nouter) = @timed trainMM!(classifier, A, f, tol, s, fullsvd=Asvd, nouter=nouter, ninner=ninner, mult=mult, init=false, verbose=false)
     
-    # Run the experiment several times.
-    # original_stdout = stdout
-    results = open("results/$(dataset)/1-kernel=$(kernelopt)-s=$(s)-$(string(algorithm)).out", "w")
-    writedlm(results, ["trial" "sparsity" "time" "iterations" "objective" "distance" "train_accuracy" "test_accuracy"])
-    @showprogress 1 "Testing $(algorithm)..." for trial in 1:ntrials
-        # # Feed STDOUT output to a log file
-        # io = open("results/$(dataset)/1-kernel=$(kernelopt)-k=$(k)-$(string(algorithm))-trial=$(trial).log", "w")
-        # redirect_stdout(io)
+    # Open file to write results on disk. Save settings on a separate log.
+    dir = joinpath("results", dataset)
+    open(joinpath(dir, "$(fname).log"), "w") do io
+        for (key, val) in options
+            writedlm(io, [key val], '=')
+        end
+    end
+    results = open(joinpath(dir, "$(fname).out"), "w")
+    writedlm(results, ["trial" "sparsity" "sv" "time" "iter" "obj" "dist" "train_acc" "test_acc"])
 
-        # Train using the chosen MM algorithm
-        randomize_weights!(classifier, local_rng)
-        r = execute(ninner, nouter)
-
-        t = r.time
-        iters, obj, dist = r.value
+    # helper function to write results
+    function write_result(trial, result)
+        # Get timing and convergence data.
+        t = result.time
+        iters, obj, dist = result.value
         
-        # Test the classifier against the test data
+        # Check support vectors.
+        sv = count_support_vecs(classifier)
+
+        # Test the classifier.
         train_acc = round(accuracy_score(classifier, train_X, train_targets)*100, sigdigits=4)
         test_acc = round(accuracy_score(classifier, test_X, test_targets)*100, sigdigits=4)
         sparsity = round(s*100, sigdigits=4)
 
-        # Write to results file.
-        writedlm(results, Any[trial sparsity t iters obj dist train_acc test_acc])
+        # Write results to file.
+        writedlm(results, Any[trial sparsity sv t iters obj dist train_acc test_acc])
 
-        # Close log file.
-        # close(io)
+        return nothing
     end
 
-    # Close file.
-    # redirect_stdout(original_stdout)
+    # Run the algorithm with univariate OLS estimates.
+    initialize_weights!(classifier, A)
+    result = execute(ninner, nouter)
+    write_result(0, result)
+
+    # Run the algorithm several times with randomized weights.
+    @showprogress 1 "Testing $(algorithm)..." for trial in 1:ntrials
+        randomize_weights!(classifier, local_rng)
+        result = execute(ninner, nouter)
+        write_result(trial, result)
+    end
+
     close(results)
 end
 
@@ -94,13 +112,15 @@ end
 if "synthetic" in ARGS
     println("Running 'synthetic' benchmark")
     for opt in (SD, MM)
+        fname = generate_filename(1, opt)
+
         # precompile
-        run_experiment(opt, "synthetic", BinaryClassifier{Float64},
+        run_experiment(fname, opt, "synthetic", BinaryClassifier{Float64},
             tol=1e-4, ninner=2, nouter=2, mult=1.2,
             intercept=true, kernel=nothing)
 
         # run
-        run_experiment(opt, "synthetic", BinaryClassifier{Float64},
+        run_experiment(fname, opt, "synthetic", BinaryClassifier{Float64},
             tol=1e-4, ninner=10^4, nouter=50, mult=1.2,
             intercept=true, kernel=nothing)
     end
@@ -110,13 +130,15 @@ end
 if "iris" in ARGS
     println("Running 'iris' benchmark")
     for opt in (SD, MM)
+        fname = generate_filename(1, opt)
+
         # precompile
-        run_experiment(opt, "iris", MultiClassifier{Float64},
+        run_experiment(fname, opt, "iris", MultiClassifier{Float64},
             tol=1e-4, ninner=2, nouter=2, mult=1.2,
             intercept=true, kernel=nothing, strategy=OVO())
 
         # run
-        run_experiment(opt, "iris", MultiClassifier{Float64},
+        run_experiment(fname, opt, "iris", MultiClassifier{Float64},
             tol=1e-4, ninner=10^4, nouter=50, mult=1.2,
             intercept=true, kernel=nothing, strategy=OVO())
     end
@@ -126,13 +148,15 @@ end
 if "spiral" in ARGS
     println("Running 'spiral' benchmark")
     for opt in (SD, MM)
+        fname = generate_filename(1, opt)
+
         # precompile
-        run_experiment(opt, "spiral", MultiClassifier{Float64},
+        run_experiment(fname, opt, "spiral", MultiClassifier{Float64},
             tol=1e-4, ninner=2, nouter=2, mult=1.2,
             intercept=true, kernel=RBFKernel(), strategy=OVO())
 
         # run
-        run_experiment(opt, "spiral", MultiClassifier{Float64},
+        run_experiment(fname, opt, "spiral", MultiClassifier{Float64},
             tol=1e-4, ninner=10^4, nouter=50, mult=1.2,
             intercept=true, kernel=RBFKernel(), strategy=OVO())
     end
@@ -142,13 +166,15 @@ end
 if "letter-recognition" in ARGS
     println("Running 'letter-recognition' benchmark")
     for opt in (SD, MM)
+        fname = generate_filename(1, opt)
+
         # precompile
-        run_experiment(opt, "letter-recognition", MultiClassifier{Float64},
+        run_experiment(fname, opt, "letter-recognition", MultiClassifier{Float64},
             tol=1e-4, ninner=2, nouter=2, mult=1.2, scale=:minmax,
             intercept=true, kernel=nothing, strategy=OVO())
 
         # run
-        run_experiment(opt, "letter-recognition", MultiClassifier{Float64}, 
+        run_experiment(fname, opt, "letter-recognition", MultiClassifier{Float64}, 
             tol=1e-4, ninner=10^5, nouter=50, mult=1.2, scale=:minmax,
             intercept=true, kernel=nothing, strategy=OVO())
     end
@@ -158,13 +184,15 @@ end
 if "breast-cancer-wisconsin" in ARGS
     println("Running 'breast-cancer-wisconsin' benchmark")
     for opt in (SD, MM)
+        fname = generate_filename(1, opt)
+
         # precompile
-        run_experiment(opt, "breast-cancer-wisconsin", BinaryClassifier{Float64},
+        run_experiment(fname, opt, "breast-cancer-wisconsin", BinaryClassifier{Float64},
             tol=1e-4, ninner=2, nouter=2, mult=1.2, scale=:none,
             intercept=true, kernel=nothing)
 
         # run
-        run_experiment(opt, "breast-cancer-wisconsin", BinaryClassifier{Float64}, 
+        run_experiment(fname, opt, "breast-cancer-wisconsin", BinaryClassifier{Float64}, 
             tol=1e-4, ninner=10^5, nouter=50, mult=1.2, scale=:none,
             intercept=true, kernel=nothing)
     end
@@ -174,13 +202,15 @@ end
 if "splice" in ARGS
     println("Running 'splice' benchmark")
     for opt in (SD, MM)
+        fname = generate_filename(1, opt)
+
         # precompile
-        run_experiment(opt, "splice", MultiClassifier{Float64},
+        run_experiment(fname, opt, "splice", MultiClassifier{Float64},
             tol=1e-4, ninner=2, nouter=2, mult=1.1, scale=:minmax,
             intercept=true, kernel=nothing, strategy=OVO())
 
         # run
-        run_experiment(opt, "splice", MultiClassifier{Float64}, 
+        run_experiment(fname, opt, "splice", MultiClassifier{Float64}, 
             tol=1e-4, ninner=10^5, nouter=100, mult=1.1, scale=:minmax,
             intercept=true, kernel=nothing, strategy=OVO())
     end
@@ -190,13 +220,15 @@ end
 if "TCGA-PANCAN-HiSeq" in ARGS
     println("Running 'TCGA-PANCAN-HiSeq' benchmark")
     for opt in (SD, MM)
+        fname = generate_filename(1, opt)
+
         # precompile
-        run_experiment(opt, "TCGA-PANCAN-HiSeq", MultiClassifier{Float64},
+        run_experiment(fname, opt, "TCGA-PANCAN-HiSeq", MultiClassifier{Float64},
             tol=1e-4, ninner=2, nouter=2, mult=1.05, scale=:minmax,
             intercept=true, kernel=nothing, strategy=OVO())
 
         # run
-        run_experiment(opt, "TCGA-PANCAN-HiSeq", MultiClassifier{Float64}, 
+        run_experiment(fname, opt, "TCGA-PANCAN-HiSeq", MultiClassifier{Float64}, 
             tol=1e-4, ninner=10^5, nouter=200, mult=1.05, scale=:minmax,
             intercept=true, kernel=nothing, strategy=OVO())
     end
@@ -206,13 +238,15 @@ end
 if "optdigits" in ARGS
     println("Running 'optdigits' benchmark")
     for opt in (SD, MM)
+        fname = generate_filename(1, opt)
+
         # precompile
-        run_experiment(opt, "optdigits", MultiClassifier{Float64},
+        run_experiment(fname, opt, "optdigits", MultiClassifier{Float64},
             tol=1e-4, ninner=2, nouter=2, mult=1.2, scale=:none,
             intercept=true, kernel=nothing, strategy=OVO(), percent_train=0.68)
 
         # run
-        run_experiment(opt, "optdigits", MultiClassifier{Float64}, 
+        run_experiment(fname, opt, "optdigits", MultiClassifier{Float64}, 
             tol=1e-4, ninner=10^5, nouter=50, mult=1.2, scale=:none,
             intercept=true, kernel=nothing, strategy=OVO(), percent_train=0.68)
     end

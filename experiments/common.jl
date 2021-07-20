@@ -1,7 +1,19 @@
-# Make sure we set up BLAS threads correctly
+using SparseSVM, MLDataUtils, KernelFunctions, LinearAlgebra
+using CSV, DataFrames, Random, StableRNGs, Statistics
+using Dates, DelimitedFiles, ProgressMeter
+
+##### Make sure we set up BLAS threads correctly #####
 BLAS.set_num_threads(8)
 
-# Algorithm Option Definitions
+##### handle filenames #####
+function generate_filename(experiment, algorithm)
+    return string(experiment,
+        "-", Dates.format(now(), dateformat"yyyymmdd-HHMMSS"),
+        "-algorithm=", string(algorithm),
+    )
+end
+
+##### Define special type for selecting different algorithms #####
 @enum AlgOption SD=1 MM=2
 
 function get_algorithm_func(opt::AlgOption)
@@ -14,9 +26,11 @@ function get_algorithm_func(opt::AlgOption)
     end
 end
 
+##### wrappers for creating a classifier object #####
 make_classifier(::Type{C}, X, targets, refclass; kwargs...) where C<:MultiClassifier = C(X, targets; kwargs...)
 make_classifier(::Type{C}, X, targets, refclass; strategy::MultiClassStrategy=OVR(), kwargs...) where C<:BinaryClassifier = C(X, targets, refclass; kwargs...)
 
+##### initializing model parameters #####
 function initialize_weights!(classifier::BinaryClassifier, A::AbstractMatrix)
     y = classifier.data.y
     weights = classifier.weights
@@ -48,6 +62,8 @@ function randomize_weights!(classifier::MultiClassifier, rng)
     foreach(svm -> randomize_weights!(svm, rng), classifier.svm)
 end
 
+##### performance metrics #####
+
 function accuracy_score(classifier, X, targets)
     predictions = classifier.(eachrow(X))
     n = length(predictions)
@@ -67,19 +83,7 @@ function discovery_metrics(x, y)
     return (TP, FP, TN, FN)
 end
 
-function support_vector_idx(classifier::BinaryClassifier)
-    α = classifier.weights
-    return findall(x -> x != 0, α)
-end
-
-function support_vector_idx(classifier::MultiClassifier)
-    subset = Int[]
-    for svm in classifier.svm
-        s = support_vector_idx(svm)
-        union!(subset, s)
-    end
-    return sort!(subset)
-end
+##### standardization #####
 
 function _rescale_!(::Val{:none}, X)
     X
