@@ -208,6 +208,11 @@ function run_experiment(fname, dataset, our_grid, their_grid, ctype=MultiClassif
     return nothing
 end
 
+function cleanup_precompile(fname)
+    rm(joinpath("results", dataset, "$(fname).out"))
+    rm(joinpath("results", dataset, "$(fname).log"))
+end
+
 ##### Example 1: synthetic #####
 if "synthetic" in ARGS
     our_grid = [
@@ -220,20 +225,223 @@ if "synthetic" in ARGS
         range(0.09, 0.01, length=5);
         range(0.009, 0.001, length=5);
     ]
+    dataset = "synthetic"
 
-    println("Running 'synthetic' benchmark")
+    println("Running '$(dataset)' benchmark")
 
     # precompile
     fname = generate_filename(4, "all")
-    run_experiment(fname, "synthetic", our_grid, their_grid, BinaryClassifier{Float64},
+    run_experiment(fname, dataset, our_grid, their_grid, BinaryClassifier{Float64},
         nfolds=3, tol=1e-1, ninner=2, nouter=2, mult=1.2,
         intercept=true, kernel=nothing)
-    rm(joinpath("results", "synthetic", "$(fname).out"))
-    rm(joinpath("results", "synthetic", "$(fname).log"))
+    cleanup_precompile(fname)
 
     # run
     fname = generate_filename(4, "all")
-    run_experiment(fname, "synthetic", our_grid, their_grid, BinaryClassifier{Float64},
-        nfolds=10, tol=1e-6, ninner=10^4, nouter=100, mult=1.2,
+    run_experiment(fname, dataset, our_grid, their_grid, BinaryClassifier{Float64},
+        nfolds=10, tol=1e-4, ninner=10^4, nouter=100, mult=1.2,
         intercept=true, kernel=nothing)
+end
+
+
+##### Example 2: iris #####
+if "iris" in ARGS
+    our_grid = [
+        0.0, 0.25, 0.5, 0.75 
+    ]
+    their_grid = [
+        1.0, 1e-1, 1e-2, 1e-3
+    ]
+    dataset = "iris"
+
+    println("Running '$(dataset)' benchmark")
+
+    # precompile
+    fname = generate_filename(4, "all")
+    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
+        nfolds=3, tol=1e-1, ninner=2, nouter=2, mult=1.2,
+        intercept=true, kernel=nothing)
+    cleanup_precompile(fname)
+
+    # run
+    fname = generate_filename(4, "all")
+    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
+        nfolds=10, tol=1e-4, ninner=10^4, nouter=100, mult=1.2,
+        intercept=true, kernel=nothing)
+end
+
+##### Example 3: spiral #####
+if "spiral" in ARGS
+    our_grid = [
+        range(0.0, 0.9; length=5);
+        range(0.91, 0.99; length=5);
+        range(0.991, 0.999; length=5);
+    ]
+    their_grid = [
+        range(1.0, 0.1, length=5);
+        range(0.09, 0.01, length=5);
+        range(0.009, 0.001, length=5);
+    ]
+    dataset = "spiral"
+
+    println("Running '$(dataset)' benchmark")
+
+    # precompile
+    fname = generate_filename(4, "all")
+    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
+        nfolds=3, tol=1e-1, ninner=2, nouter=2, mult=1.2,
+        intercept=true, kernel=RBFKernel())
+    cleanup_precompile(fname)
+
+    # run
+    fname = generate_filename(4, "all")
+    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
+        nfolds=10, tol=1e-4, ninner=10^4, nouter=100, mult=1.2,
+        intercept=true, kernel=RBFKernel())
+end
+
+##### Example 4: letter-recognition #####
+if "letter-recognition" in ARGS
+    our_grid = [
+        i/16 for i in 0:15
+    ]
+    their_grid = [
+        range(1.0, 0.1, length=5);
+        range(0.09, 0.01, length=5);
+        range(0.009, 0.001, length=5);
+        1e-4
+    ]
+    dataset = "letter-recognition"
+
+    println("Running '$(dataset)' benchmark")
+
+    # precompile
+    fname = generate_filename(4, "all")
+    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
+        nfolds=3, tol=1e-1, ninner=2, nouter=2, mult=1.2,
+        intercept=true, kernel=nothing)
+    cleanup_precompile(fname)
+
+    # run
+    fname = generate_filename(4, "all")
+    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
+        nfolds=10, tol=1e-4, ninner=10^5, nouter=100, mult=1.2, scale=:minmax,
+        intercept=true, kernel=nothing)
+end
+
+##### Example 5: breast-cancer-wisconsin #####
+if "breast-cancer-wisconsin" in ARGS
+    our_grid = [
+        i/10 for i in 0:9
+    ]
+    their_grid = [
+        range(1.0, 0.1, length=5);
+        range(0.09, 0.01, length=5);
+    ]
+    dataset = "breast-cancer-wisconsin"
+
+    println("Running '$(dataset)' benchmark")
+
+    # precompile
+    fname = generate_filename(4, "all")
+    run_experiment(fname, dataset, our_grid, their_grid, BinaryClassifier{Float64},
+        nfolds=3, tol=1e-1, ninner=2, nouter=2, mult=1.2,
+        intercept=true, kernel=nothing)
+    cleanup_precompile(fname)
+
+    # run
+    fname = generate_filename(4, "all")
+    run_experiment(fname, dataset, our_grid, their_grid, BinaryClassifier{Float64},
+        nfolds=10, tol=1e-4, ninner=10^5, nouter=100, mult=1.2, scale=:none,
+        intercept=true, kernel=nothing)
+end
+
+##### Example 6: splice #####
+if "splice" in ARGS
+    our_grid = [
+        range(0.0, 0.9; length=5);
+        range(0.91, 0.99; length=5);
+        range(0.991, 0.999; length=5);
+    ]
+    their_grid = [
+        range(1.0, 0.1, length=5);
+        range(0.09, 0.01, length=5);
+        range(0.009, 0.001, length=5);
+    ]
+    dataset = "splice"
+
+    println("Running '$(dataset)' benchmark")
+
+    # precompile
+    fname = generate_filename(4, "all")
+    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
+        nfolds=3, tol=1e-1, ninner=2, nouter=2, mult=1.2,
+        intercept=true, kernel=nothing)
+    cleanup_precompile(fname)
+
+    # run
+    fname = generate_filename(4, "all")
+    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
+        nfolds=10, tol=1e-4, ninner=10^5, nouter=100, mult=1.2, scale=:minmax,
+        intercept=true, kernel=nothing)
+end
+
+##### Example 7: TCGA-PANCAN-HiSeq #####
+if "TCGA-PANCAN-HiSeq" in ARGS
+    our_grid = [
+        range(0.0, 0.9; length=5);
+        range(0.91, 0.99; length=5);
+        range(0.991, 0.999; length=5);
+    ]
+    their_grid = [
+        range(1.0, 0.1, length=5);
+        range(0.09, 0.01, length=5);
+        range(0.009, 0.001, length=5);
+    ]
+    dataset = "TCGA-PANCAN-HiSeq"
+
+    println("Running '$(dataset)' benchmark")
+
+    # precompile
+    fname = generate_filename(4, "all")
+    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
+        nfolds=3, tol=1e-1, ninner=2, nouter=2, mult=1.2,
+        intercept=true, kernel=nothing)
+    cleanup_precompile(fname)
+
+    # run
+    fname = generate_filename(4, "all")
+    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
+        nfolds=10, tol=1e-4, ninner=10^5, nouter=200, mult=1.05, scale=:minmax,
+        intercept=true, kernel=nothing)
+end
+
+##### Example 8: optdigits #####
+if "optdigits" in ARGS
+    our_grid = [
+        range(0.0, 0.9; length=5);
+        range(0.91, 0.99; length=5);
+        range(0.991, 0.999; length=5);
+    ]
+    their_grid = [
+        range(1.0, 0.1, length=5);
+        range(0.09, 0.01, length=5);
+        range(0.009, 0.001, length=5);
+    ]
+    dataset = "optdigits"
+
+    println("Running '$(dataset)' benchmark")
+
+    # precompile
+    fname = generate_filename(4, "all")
+    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
+        nfolds=3, tol=1e-1, ninner=2, nouter=2, mult=1.2,
+        intercept=true, kernel=nothing)
+    cleanup_precompile(fname)
+
+    # run
+    fname = generate_filename(4, "all")
+    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
+        nfolds=10, tol=1e-4, ninner=10^5, nouter=100, mult=1.2, scale=:none,
+        intercept=true, kernel=nothing, proportion_train=0.68)
 end
