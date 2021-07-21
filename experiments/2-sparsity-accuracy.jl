@@ -56,54 +56,15 @@ function simulate_data(rng,
     return target, X, beta, causal_idx, Σ
 end
 
-function run_experiment(fname, algorithm::AlgOption, grid;
-        m::Int=100,
-        n::Int=50,
-        k0::Int=1,
-        effect_size::Vector=[1.0, 1.0],
-        default_sigma_ij::Real=1e-4,
-        default_sigma_j::Real=1.0,
-        causal_sigma_ij::Real=default_sigma_ij,
-        causal_sigma_j::Real=default_sigma_j,
+function run_experiment(fname, algorithm::AlgOption, y, X, beta0, grid;
         proportion_train::Real=0.8,
         tol::Real=1e-6,
         nouter::Int=20,
         ninner::Int=1000,
         mult::Real=1.2,
     )
-    # Put options into a list.
-    k0 = clamp(k0, 1, n)
-    options = (
-        :m => m,
-        :n => n,
-        :k0 => k0,
-        :effect_size_min => effect_size[1],
-        :effect_size_max => effect_size[2],
-        :default_sigma_ij => default_sigma_ij,
-        :default_sigma_j => default_sigma_j,
-        :causal_sigma_ij => causal_sigma_ij,
-        :causal_sigma_j => causal_sigma_j,
-        :fname => fname,
-        :algorithm => algorithm,
-        :proportion_train => proportion_train,
-        :tol => tol,
-        :nouter => nouter,
-        :ninner => ninner,
-        :mult => mult,
-    )
-
-    # Simulate data.
-    rng = StableRNG(2000)
-    y, X, beta0, causal_idx, Σ = simulate_data(rng, m, n, k0,
-        effect_size,
-        default_sigma_ij,
-        default_sigma_j,
-        causal_sigma_ij,
-        causal_sigma_j
-    )
-    labeled_data = (X, y)
-
     # Create the train and test data sets.
+    labeled_data = (X, y)
     (train_X, train_targets), (test_X, test_targets) = splitobs(labeled_data, at=proportion_train, obsdim=1)
 
     # Process options
@@ -112,26 +73,18 @@ function run_experiment(fname, algorithm::AlgOption, grid;
     nvals = length(gridvals)
 
     # Initialize classifier.
-    classifier = BinaryClassifier{Float64}(train_X, train_targets, first(train_targets), intercept=false)
-    A, Asvd = SparseSVM.get_A_and_SVD(classifier)
-    initialize_weights!(classifier, A)
-    beta_init = copy(classifier.weights)
-
-    # Open file to write results on disk. Save settings on a separate log.
-    dir = joinpath("results", "experiment2")
-    !isdir(dir) && mkdir(dir)
-    open(joinpath(dir, "$(fname).log"), "a+") do io
-        for (key, val) in options
-            writedlm(io, [key val], '=')
-        end
-        println(io)
+    init_cost = @timed begin
+        classifier = BinaryClassifier{Float64}(train_X, train_targets, first(train_targets), intercept=false)
+        A, Asvd = SparseSVM.get_A_and_SVD(classifier)
+        initialize_weights!(classifier, A)
+        beta_init = copy(classifier.weights)
     end
-    results = open(joinpath(dir, "$(fname).out"), "a+")
-    writedlm(results, ["m" "n" "k0" "sparsity" "sv" "time" "iter" "obj" "dist" "MSE" "TP" "FP" "TN" "FN" "train_acc" "test_acc"])
 
+    # Open file to write results on disk.
+    results = open(joinpath(dir, "$(fname).out"), "a+")
     function write_result(classifier, s, result)
         # Get timing and convergence data.
-        t = result.time
+        t = result.time + init_cost.time
         iters, obj, dist = result.value
 
         # Check support vectors.
@@ -158,6 +111,7 @@ function run_experiment(fname, algorithm::AlgOption, grid;
     end
 
     # Run the algorithm with different sparsity values.
+    m, n = size(X)
     @showprogress 1 "Testing $(algorithm) on $(m) × $(n) problem... " for s in gridvals
         copyto!(classifier.weights, beta_init)
         result = @timed trainMM!(classifier, A, f, tol, s, fullsvd=Asvd,
@@ -173,6 +127,7 @@ end
 # Options
 algorithms = (MM, SD)
 fnames = map(opt -> generate_filename(2, opt), algorithms)
+proportion_train = 0.8
 
 default_size = 500
 p = floor(Int, log10(default_size)) + 1
@@ -184,10 +139,24 @@ default_sigma_ij = 0.0
 causal_sigma_j = 1.0
 causal_sigma_ij=causal_sigma_ij = 0.0
 
+seed = 2000
+simulate(m, n) = simulate_data(StableRNG(seed), m, n, k0,
+    effect_size,
+    default_sigma_ij,
+    default_sigma_j,
+    causal_sigma_ij,
+    causal_sigma_j
+)
+
 tol = 1e-6
 ninner = 10^4
 nouter = 100
 mult = 1.2
+
+# Initialize directories.
+dir = joinpath("results", "experiment2")
+!isdir("results") && mkdir("results")
+!isdir(dir) && mkdir(dir)
 
 # Pre-compile
 sparsity_grid = [0.0, 0.5]
@@ -195,65 +164,86 @@ for opt in algorithms
     m = 100
     n = 100    
     fname = generate_filename(2, opt)
-    run_experiment(fname, opt, sparsity_grid,
-        m=100,
-        n=100,
-        k0=k0,
-        effect_size=effect_size,
-        default_sigma_j=default_sigma_j,
-        default_sigma_ij=default_sigma_ij,
-        causal_sigma_j=causal_sigma_j,
-        causal_sigma_ij=causal_sigma_ij,
+    y, X, beta0, _, _ = simulate(m, n)
+    run_experiment(fname, opt, y, X, beta0, sparsity_grid,
         tol=tol,
         ninner=2,
         nouter=2,
         mult=mult,
+        proportion_train=proportion_train,
     )
-    rm(joinpath("results", "experiment2", "$(fname).out"))
-    rm(joinpath("results", "experiment2", "$(fname).log"))
+    rm(joinpath(dir, "$(fname).out"))
 end
 
-sparsity_grid = [
-    range(0.0, 0.9, step=1e-1);
-    range(0.91, 0.99, step=2e-2);
-    range(0.991, 0.999, step=2e-3);
-    range(0.9991, 0.9999, step=2e-4)
-]
+# Set the search grid.
+sparsity_grid = [ [0.0, 0.5, 0.9]; [1 - 50 / n for n in size_grid] ]
+
+# Initialize results and log files.
+for (opt, fname) in zip(algorithms, fnames)
+    options = (
+        :seed => seed,
+        :default_size => default_size,
+        :k0 => k0,
+        :effect_size_min => effect_size[1],
+        :effect_size_max => effect_size[2],
+        :default_sigma_ij => default_sigma_ij,
+        :default_sigma_j => default_sigma_j,
+        :causal_sigma_ij => causal_sigma_ij,
+        :causal_sigma_j => causal_sigma_j,
+        :algorithm => opt,
+        :proportion_train => proportion_train,
+        :tol => tol,
+        :nouter => nouter,
+        :ninner => ninner,
+        :mult => mult,
+    )
+
+    # results file
+    open(joinpath("results", "experiment2", "$(fname).out"), "a+") do results
+        writedlm(results, ["m" "n" "k0" "sparsity" "sv" "time" "iter" "obj" "dist" "MSE" "TP" "FP" "TN" "FN" "train_acc" "test_acc"])
+    end
+    
+    # log file
+    open(joinpath(dir, "$(fname).log"), "a+") do io
+        for (key, val) in options
+            writedlm(io, [key val], '=')
+        end
+        println(io)
+    end
+end
 
 # Case m > n: More samples than predictors.
-for (opt, fname) in zip(algorithms, fnames), m in size_grid
+for m in size_grid
     n = default_size
-    run_experiment(fname, opt, sparsity_grid,
-        m=m,
-        n=n,
-        k0=k0,
-        effect_size=effect_size,
-        default_sigma_j=default_sigma_j,
-        default_sigma_ij=default_sigma_ij,
-        causal_sigma_j=causal_sigma_j,
-        causal_sigma_ij=causal_sigma_ij,
-        tol=tol,
-        ninner=ninner,
-        nouter=nouter,
-        mult=mult,
-    )
+
+    # Simulate data.
+    y, X, beta0, _, _ = simulate(m, n)
+
+    for (opt, fname) in zip(algorithms, fnames)
+        run_experiment(fname, opt, y, X, beta0, sparsity_grid,
+            tol=tol,
+            ninner=ninner,
+            nouter=nouter,
+            mult=mult,
+            proportion_train=proportion_train,
+        )
+    end
 end
 
 # Case: m < n: More predictors than samples.
-for (opt, fname) in zip(algorithms, fnames), n in size_grid
+for n in size_grid
     m = default_size
-    run_experiment(fname, opt, sparsity_grid,
-        m=m,
-        n=n,
-        k0=k0,
-        effect_size=effect_size,
-        default_sigma_j=default_sigma_j,
-        default_sigma_ij=default_sigma_ij,
-        causal_sigma_j=causal_sigma_j,
-        causal_sigma_ij=causal_sigma_ij,
-        tol=tol,
-        ninner=ninner,
-        nouter=nouter,
-        mult=mult,
-    )
+
+    # Simulate data.
+    y, X, beta0, _, _ = simulate(m, n)
+
+    for (opt, fname) in zip(algorithms, fnames)
+        run_experiment(fname, opt, y, X, beta0, sparsity_grid,
+            tol=tol,
+            ninner=ninner,
+            nouter=nouter,
+            mult=mult,
+            proportion_train=proportion_train,
+        )
+    end
 end
