@@ -65,9 +65,8 @@ end
 ##### performance metrics #####
 
 function accuracy_score(classifier, X, targets)
-    predictions = classifier.(eachrow(X))
-    n = length(predictions)
-    return sum(predictions .== targets) / n
+    predictions = classifier(X)
+    return mean(predictions .== targets)
 end
 
 mse(x, y) = mean( (x - y) .^ 2 )

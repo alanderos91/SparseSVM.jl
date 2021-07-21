@@ -70,6 +70,10 @@ end
     
 abstract type Classifier end
 
+function (classifier::Classifier)(X::AbstractMatrix)
+    classifier.(eachrow(X))
+end
+
 struct BinaryClassifier{T<:AbstractFloat,S,KF} <: Classifier
     weights::Vector{T}
     intercept::Bool
@@ -166,7 +170,7 @@ function prediction(classifier::BinaryClassifier{T}, x) where T
     return fx
 end
 
-function (classifier::BinaryClassifier{T})(x) where T
+function (classifier::BinaryClassifier{T})(x::AbstractVector) where T
     fx = prediction(classifier, x)
     label = classify(fx, LabelEnc.MarginBased(T))
     return classifier.data.label2target[label]
@@ -260,7 +264,7 @@ function prediction(classifier::MultiClassifier{T}, x) where T
     return fx
 end
 
-function (classifier::MultiClassifier{T})(x) where T
+function (classifier::MultiClassifier{T})(x::AbstractVector) where T
     vote, target2ind = classifier.votes, classifier.target2ind
     fill!(vote, 0)
 
