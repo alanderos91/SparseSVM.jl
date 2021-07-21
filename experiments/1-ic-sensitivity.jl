@@ -65,6 +65,7 @@ function run_experiment(fname, algorithm, dataset, ctype;
     
     # Open file to write results on disk. Save settings on a separate log.
     dir = joinpath("results", dataset)
+    !isdir(dir) && mkdir(dir)
     open(joinpath(dir, "$(fname).log"), "w") do io
         for (key, val) in options
             writedlm(io, [key val], '=')
@@ -89,7 +90,8 @@ function run_experiment(fname, algorithm, dataset, ctype;
 
         # Write results to file.
         writedlm(results, Any[trial sparsity sv t iters obj dist train_acc test_acc])
-
+        flush(results)
+        
         return nothing
     end
 

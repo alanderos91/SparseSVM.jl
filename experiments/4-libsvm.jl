@@ -209,11 +209,6 @@ function run_experiment(fname, dataset, our_grid, their_grid, ctype=MultiClassif
     return nothing
 end
 
-function cleanup_precompile(fname)
-    rm(joinpath("results", dataset, "$(fname).out"))
-    rm(joinpath("results", dataset, "$(fname).log"))
-end
-
 ##### Example 1: synthetic #####
 if "synthetic" in ARGS
     our_grid = [

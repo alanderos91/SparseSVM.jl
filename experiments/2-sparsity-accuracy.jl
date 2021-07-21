@@ -119,12 +119,14 @@ function run_experiment(fname, algorithm::AlgOption, grid;
 
     # Open file to write results on disk. Save settings on a separate log.
     dir = joinpath("results", "experiment2")
-    open(joinpath(dir, "$(fname).log"), "w+") do io
+    !isdir(dir) && mkdir(dir)
+    open(joinpath(dir, "$(fname).log"), "a+") do io
         for (key, val) in options
             writedlm(io, [key val], '=')
         end
+        println(io)
     end
-    results = open(joinpath(dir, "$(fname).out"), "w+")
+    results = open(joinpath(dir, "$(fname).out"), "a+")
     writedlm(results, ["m" "n" "k0" "sparsity" "sv" "time" "iter" "obj" "dist" "MSE" "TP" "FP" "TN" "FN" "train_acc" "test_acc"])
 
     function write_result(classifier, s, result)

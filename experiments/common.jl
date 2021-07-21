@@ -97,3 +97,10 @@ function _rescale_!(::Val{:minmax}, X) # [0, 1]
     xmax = maximum(X, dims=2)
     @. X = (X - xmin) / (xmax - xmin)
 end
+
+# other utils
+
+function cleanup_precompile(fname)
+    rm(joinpath("results", dataset, "$(fname).out"))
+    rm(joinpath("results", dataset, "$(fname).log"))
+end
