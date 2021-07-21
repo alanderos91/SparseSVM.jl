@@ -94,13 +94,14 @@ function cv(results, algname, init_f, grid, cv_set, test_set, nfolds; message = 
         # get training set and validation set
         ((train_X, train_targets), (val_X, val_targets)) = fold
 
-        run_f = init_f(train_X, train_targets)
+        _r = @timed init_f(train_X, train_targets)
+        run_f = _r.value
 
         for (i, val) in enumerate(grid)
             # Run the training algorithm with hyperparameter = val.
             r = @timed run_f(val)
             classifier = r.value
-            t = r.time
+            t = i > 1 ? r.time : r.time + _r.time # account for init cost
 
             # Compute evaluation metrics.
             train_acc = round(accuracy_score(classifier, train_X, train_targets)*100, sigdigits=4)
@@ -232,7 +233,7 @@ if "synthetic" in ARGS
     # precompile
     fname = generate_filename(4, "all")
     run_experiment(fname, dataset, our_grid, their_grid, BinaryClassifier{Float64},
-        nfolds=3, tol=1e-1, ninner=2, nouter=2, mult=1.2,
+        nfolds=10, tol=1e-1, ninner=2, nouter=2, mult=1.2,
         intercept=true, kernel=nothing)
     cleanup_precompile(fname)
 
@@ -259,7 +260,7 @@ if "iris" in ARGS
     # precompile
     fname = generate_filename(4, "all")
     run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=3, tol=1e-1, ninner=2, nouter=2, mult=1.2,
+        nfolds=10, tol=1e-1, ninner=2, nouter=2, mult=1.2,
         intercept=true, kernel=nothing)
     cleanup_precompile(fname)
 
@@ -289,7 +290,7 @@ if "spiral" in ARGS
     # precompile
     fname = generate_filename(4, "all")
     run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=3, tol=1e-1, ninner=2, nouter=2, mult=1.2,
+        nfolds=10, tol=1e-1, ninner=2, nouter=2, mult=1.2,
         intercept=true, kernel=RBFKernel())
     cleanup_precompile(fname)
 
@@ -318,7 +319,7 @@ if "letter-recognition" in ARGS
     # precompile
     fname = generate_filename(4, "all")
     run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=3, tol=1e-1, ninner=2, nouter=2, mult=1.2,
+        nfolds=10, tol=1e-1, ninner=2, nouter=2, mult=1.2,
         intercept=true, kernel=nothing)
     cleanup_precompile(fname)
 
@@ -345,7 +346,7 @@ if "breast-cancer-wisconsin" in ARGS
     # precompile
     fname = generate_filename(4, "all")
     run_experiment(fname, dataset, our_grid, their_grid, BinaryClassifier{Float64},
-        nfolds=3, tol=1e-1, ninner=2, nouter=2, mult=1.2,
+        nfolds=10, tol=1e-1, ninner=2, nouter=2, mult=1.2,
         intercept=true, kernel=nothing)
     cleanup_precompile(fname)
 
@@ -375,7 +376,7 @@ if "splice" in ARGS
     # precompile
     fname = generate_filename(4, "all")
     run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=3, tol=1e-1, ninner=2, nouter=2, mult=1.2,
+        nfolds=10, tol=1e-1, ninner=2, nouter=2, mult=1.2,
         intercept=true, kernel=nothing)
     cleanup_precompile(fname)
 
@@ -405,7 +406,7 @@ if "TCGA-PANCAN-HiSeq" in ARGS
     # precompile
     fname = generate_filename(4, "all")
     run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=3, tol=1e-1, ninner=2, nouter=2, mult=1.2,
+        nfolds=10, tol=1e-1, ninner=2, nouter=2, mult=1.2,
         intercept=true, kernel=nothing)
     cleanup_precompile(fname)
 
@@ -435,7 +436,7 @@ if "optdigits" in ARGS
     # precompile
     fname = generate_filename(4, "all")
     run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=3, tol=1e-1, ninner=2, nouter=2, mult=1.2,
+        nfolds=10, tol=1e-1, ninner=2, nouter=2, mult=1.2,
         intercept=true, kernel=nothing)
     cleanup_precompile(fname)
 
