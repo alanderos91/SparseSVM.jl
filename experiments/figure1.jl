@@ -1,9 +1,12 @@
 using Dates, DataFrames, CSV, Statistics, Plots, StatsPlots
 
-# Get script arguments.
-idir = ARGS[1]
-odir = ARGS[2]
-datasets = ARGS[3:end]
+const PALETTE = palette(:tab10)
+const MM_COLOR = PALETTE[1]
+const SD_COLOR = PALETTE[2]
+
+default(:foreground_color_legend, nothing)
+default(:background_color_legend, nothing)
+default(:legendfontsize, 6)
 
 const SELECTED_COLS = [:sv, :obj, :dist, :test_acc]
 
@@ -24,6 +27,38 @@ function add_columns!(df, alg, dataset)
 end
 
 get_randomized_subset(df) = filter(:trial => x -> x > 0, df)
+
+function figure1(df)
+    subplot_label = Dict(
+    :sv => "no. support vectors",
+    :obj => "penalized objective",
+    :dist => "squared distance",
+    :test_acc => "test accuracy (%)",
+    )
+    w, h = default(:size)
+
+    # Initialize the plot
+    fig = plot(layout=grid(2,2), legend=false, grid=false, size=(4*w, h))
+    for (i, metric) in enumerate(SELECTED_COLS)
+        # Add boxplots for each metric.
+        @df df groupedboxplot!(fig, string.(:dataset), cols(metric),
+            title=subplot_label[metric],
+            legend=:outerright,
+            bar_width=0.4,
+            markerstrokewidth=0,
+            group=:algorithm,
+            yscale=i==2 || i==3 ? :log10 : :identity,
+            subplot=i,
+            size=(2*w, h),
+        )
+    end
+    return fig
+end
+
+# Get script arguments.
+idir = ARGS[1]
+odir = ARGS[2]
+datasets = ARGS[3:end]
 
 df = DataFrame()
 
@@ -55,27 +90,6 @@ for (i, dataset) in enumerate(datasets)
     df = vcat(df, get_randomized_subset(SD_df))
 end
 
-subplot_label = Dict(
-    :sv => "no. support vectors",
-    :obj => "penalized objective",
-    :dist => "distance",
-    :test_acc => "test accuracy (%)",
-)
-w, h = default(:size)
-
-# Initialize the plot
-fig = plot(layout=grid(4,1), legend=false, grid=false)
-for (i, metric) in enumerate(SELECTED_COLS)
-    # Add boxplots for each metric.
-    @df df groupedboxplot!(fig, string.(:dataset), cols(metric),
-        title=subplot_label[metric],
-        legend=:topleft,
-        fillalpha=0.75,
-        group=:algorithm,
-        subplot=i,
-        size=(w, 0.25*h),
-    )
-end
-plot!(fig, size=(w, 2*h))
+fig = figure1(df)
 
 savefig(fig, joinpath(odir, "Fig1.png"))
