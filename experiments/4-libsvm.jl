@@ -175,7 +175,7 @@ function run_experiment(fname, dataset, our_grid, their_grid, ctype=MultiClassif
         end
     end
     results = open(joinpath(dir, "$(fname).out"), "w")
-    writedlm(results, ["fold" "value" "time" "train_acc" "val_acc" "test_acc"])
+    writedlm(results, ["alg" "fold" "value" "time" "train_acc" "val_acc" "test_acc"])
 
     # Benchmark MM.
     fMM(X, y) = init_ours(sparse_direct!, ctype, X, y, tol, kernel, intercept, ninner, nouter, mult)
