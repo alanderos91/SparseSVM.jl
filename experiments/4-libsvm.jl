@@ -1,7 +1,7 @@
 # load common packages + functions
 include("common.jl")
 using LIBSVM
-import SparseSVM: Classifier, get_support_vec, count_support_vecs
+import SparseSVM: Classifier, get_support_vecs, count_support_vecs
 import LIBSVM: set_params!, fit!
 
 # Binary case: % zeros in coefficients
