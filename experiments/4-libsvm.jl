@@ -1,8 +1,27 @@
 # load common packages + functions
 include("common.jl")
 using LIBSVM
-import SparseSVM: Classifier
+import SparseSVM: Classifier, get_support_vec, count_support_vecs
 import LIBSVM: set_params!, fit!
+
+# Binary case: % zeros in coefficients
+measure_model_sparsity(weights::AbstractVector) = 100 * count(isequal(0), weights) / length(weights)
+
+function measure_model_sparsity(clf::BinaryClassifier)
+    weights = clf.intercept ? clf.weights[1:end-1] : clf.weights
+    measure_model_sparsity(weights)
+end
+
+# Multi case: average % zeros in coefficients
+measure_model_sparsity(weights::AbstractMatrix) = mean(measure_model_sparsity(w) for w in eachcol(weights))
+
+function measure_model_sparsity(clf::MultiClassifier)
+    x = zeros(length(clf.svm))
+    for (i, svm) in enumerate(clf.svm)
+        x[i] = measure_model_sparsity(svm)
+    end
+    return mean(x)
+end
 
 struct LIBSVMClassifier{M} <: SparseSVM.Classifier
     model::M
@@ -12,36 +31,48 @@ function (classifier::LIBSVMClassifier)(X::AbstractMatrix)
     LIBSVM.predict(classifier.model, X)
 end
 
+function get_support_vecs(classifier::LIBSVMClassifier{LinearSVC}, y, X)
+    _, d = LIBSVM.LIBLINEAR.linear_predict(classifier.model.fit, X')
+    idx = findall(y .* d' .< 1)
+    return sort!(idx)
+end
+
+measure_model_sparsity(clf::LIBSVMClassifier{LinearSVC}) = measure_model_sparsity(clf.model.fit.w)
+measure_model_sparsity(clf::LIBSVMClassifier{SVC}) = measure_model_sparsity(clf.model.fit.coefs)
+
 LIBSVM.set_params!(classifier::LIBSVMClassifier; new_params...) = LIBSVM.set_params!(classifier.model; new_params...)
 LIBSVM.fit!(classifier, X, y) = LIBSVM.fit!(classifier.model, X, y)
 
 function LIBSVM_L2(;C::Real=1.0, tol::Real=1e-4, intercept::Bool=false, kwargs...)
-    model = LIBSVMClassifier(LinearSVC(
+    clf = LIBSVMClassifier(LinearSVC(;
         solver=LIBSVM.Linearsolver.L2R_L2LOSS_SVC,
         cost=C,
         tolerance=tol,
-        bias= intercept ? 1.0 : -1.0,
+        bias= intercept ? 1.0 : 0.0,
+        kwargs...
     ))
-    return model
+    return clf
 end
 
 function LIBSVM_L1(;C::Real=1.0, tol::Real=1e-4, intercept::Bool=false, kwargs...)
-    model = LIBSVMClassifier(LinearSVC(
+    clf = LIBSVMClassifier(LinearSVC(;
         solver=LIBSVM.Linearsolver.L1R_L2LOSS_SVC,
         cost=C,
         tolerance=tol,
-        bias= intercept ? 1.0 : -1.0,
+        bias= intercept ? 1.0 : 0.0,
+        kwargs...
     ))
-    return model
+    return clf
 end
 
 function LIBSVM_RB(;C::Real=1.0, tol::Real=1e-4, intercept::Bool=false, kwargs...)
-    model = LIBSVMClassifier(SVC(
+    clf = LIBSVMClassifier(SVC(;
         kernel=LIBSVM.Kernel.RadialBasis,
         cost=C,
         tolerance=tol,
+        kwargs...
     ))
-    return model
+    return clf
 end
 
 function init_ours(F, ctype, train_X, train_targets, tol, kernel, intercept, ninner, nouter, mult)
@@ -107,10 +138,11 @@ function cv(results, algname, init_f, grid, cv_set, test_set, nfolds; message = 
             train_acc = round(accuracy_score(classifier, train_X, train_targets)*100, sigdigits=4)
             val_acc = round(accuracy_score(classifier, val_X, val_targets)*100, sigdigits=4)
             test_acc = round(accuracy_score(classifier, test_X, test_targets)*100, sigdigits=4)
+            sparsity = measure_model_sparsity(classifier)
 
             # Append results to file.
             writedlm(results, Any[
-                algname j val t train_acc val_acc test_acc
+                algname j val t train_acc val_acc test_acc sparsity
             ])
             flush(results)
 
@@ -175,7 +207,7 @@ function run_experiment(fname, dataset, our_grid, their_grid, ctype=MultiClassif
         end
     end
     results = open(joinpath(dir, "$(fname).out"), "w")
-    writedlm(results, ["alg" "fold" "value" "time" "train_acc" "val_acc" "test_acc"])
+    writedlm(results, ["alg" "fold" "value" "time" "train_acc" "val_acc" "test_acc" "sparsity"])
 
     # Benchmark MM.
     fMM(X, y) = init_ours(sparse_direct!, ctype, X, y, tol, kernel, intercept, ninner, nouter, mult)
@@ -441,3 +473,20 @@ if "optdigits" in ARGS
         nfolds=10, tol=1e-4, ninner=10^5, nouter=100, mult=1.2, scale=:none,
         intercept=true, kernel=nothing, proportion_train=0.68)
 end
+
+# function run_L2R()
+#     C_vals = [2.0 ^ k for k in 0:-1:-10]
+#     F = fL2R(X, y)
+#     for C in C_vals
+#         println("Running w/ C = $(C)...\n"); flush(stdout)
+#         F(C)
+#         println("\nFinished running w/ C = $(C).\n"); flush(stdout)
+#     end
+# end
+
+# open("/home/alanderos/Desktop/tmp.out", "w") do io
+#     redirect_stdout(run_L2R, io)
+# end
+
+# svm = F(1.0)
+# p, d = LIBSVM.LIBLINEAR.linear_predict(svm.model.fit, X')
