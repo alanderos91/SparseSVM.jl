@@ -406,4 +406,4 @@ function get_support_vecs(classifier::MultiClassifier)
     return sort!(idx)
 end
 
-count_support_vecs(classifier) = length(get_support_vecs(classifier))
+count_support_vecs(classifier::Classifier) = length(get_support_vecs(classifier))
