@@ -14,13 +14,14 @@ end
 function aggregate_metrics(df)
     gdf = groupby(df, :value)
     combine(gdf,
-        [:alg, :time, :train_acc, :val_acc, :test_acc] =>
-        ( (alg,a,b,c,d) -> (
+        [:alg, :time, :train_acc, :val_acc, :test_acc, :sparsity] =>
+        ( (alg,a,b,c,d,e) -> (
             alg=first(alg),
             time=median(a),
             train_acc=mean(b),
             val_acc=mean(c),
             test_acc=mean(d),
+            sparsity=mean(e),
         )) =>
     AsTable)
 end
@@ -53,9 +54,7 @@ function table3(idir, datasets)
         """
         )
 
-        df = CSV.read(file, DataFrame, comment="fold", header=[
-            "alg", "fold", "value", "time", "train_acc", "val_acc", "test_acc", "sparsity"]
-            )
+        df = CSV.read(file, DataFrame)
         alg_vals = unique(df.alg)
         # For each algorithm tested...
         for alg in ALGORITHMS
