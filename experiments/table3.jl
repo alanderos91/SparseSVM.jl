@@ -54,7 +54,7 @@ function table3(idir, datasets)
         )
 
         df = CSV.read(file, DataFrame, comment="fold", header=[
-            "alg", "fold", "value", "time", "train_acc", "val_acc", "test_acc" "sparsity"]
+            "alg", "fold", "value", "time", "train_acc", "val_acc", "test_acc", "sparsity"]
             )
         alg_vals = unique(df.alg)
         # For each algorithm tested...
