@@ -76,7 +76,7 @@ function table3(idir, datasets)
     # Tidy up table.
     sort!(result, [:dataset])
     select!(result,
-        [:dataset, :alg, :value, :time, :train_acc, :val_acc, :test_acc])
+        [:dataset, :alg, :value, :time, :train_acc, :val_acc, :test_acc, :sparsity])
 
     # Create a number formatter to handle scientific notation
     fancy = FancyNumberFormatter(4)
@@ -99,7 +99,7 @@ function table3(idir, datasets)
     # Create header and formatting function.
     header = [
         "Dataset", "Alg.", latexstring(L"s", " (\\%) / ", L"C"),
-        "Total Time (s)", "Tr (\\%)", "V (\\%)", "T (\\%)"
+        "Total Time (s)", "Tr (\\%)", "V (\\%)", "T (\\%)", "Sparsity"
     ]
 
     fmt(x) = x # default: no formatting
