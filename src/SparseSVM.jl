@@ -86,6 +86,30 @@ function process_dataset(input_df::DataFrame;
     end
 end
 
+struct ApplyNesterov{T}
+    b::Vector{T}
+    b_old::Vector{T}
+end
+
+function (F::ApplyNesterov)(n, unstable)
+    b, b_old = F.b, F.b_old
+    if unstable # reset acceleration
+        copyto!(b_old, b)
+        n = 1
+    else # Nesterov acceleration
+        γ = (n - 1) / (n + 3 - 1)
+        @inbounds for i in eachindex(b)
+            xi = b[i]
+            yi = b_old[i]
+            zi = xi + γ * (xi - yi)
+            b_old[i] = xi
+            b[i] = zi
+        end
+        n += 1
+    end
+    return n
+end
+
 ##### OBJECTIVE #####
 """
 `eval_objective(Ab::AbstractVector, y, b, p, rho, k, intercept)`
@@ -132,6 +156,23 @@ Evaluate ``\\frac{1}{2} \\left[ \\frac{1}{m} \\|y - A \\beta\\|^{2} + \\frac{\\r
 Assumes `A` is the design matrix.
 """
 eval_objective(A::AbstractMatrix, y, b, p, rho, k, intercept) = eval_objective(A*b, y, b, p, rho, k, intercept)
+
+struct EvaluateObjective{T}
+    Ab::Vector{T}
+    A::Matrix{T}
+    b::Vector{T}
+    y::Vector{T}
+    p::Vector{T}
+    rho::T
+    k::Int
+    intercept::Bool
+end
+
+function (F::EvaluateObjective)(needs_update)
+    if needs_update mul!(F.Ab, F.A, F.b) end
+    return eval_objective(F.Ab, F.y, F.b, F.p, F.rho, F.k, F.intercept)
+end
+
 ##### END OBJECTIVE #####
 
 ##### PROJECTIONS ######
@@ -210,6 +251,21 @@ function get_model_coefficients(p, intercept)
     return (pvec, idx)
 end
 
+struct ComputeProjection{T1,T2,T3}
+    b::T1
+    p::T2
+    pvec::T3
+    idx::Vector{Int}
+    k::Int
+end
+
+function (F::ComputeProjection)(need_copy)
+    b, p, pvec, idx, k = F.b, F.p, F.pvec, F.idx, F.k
+    if need_copy copyto!(p, b) end
+    project_sparsity_set!(pvec, idx, k)
+    return p
+end
+
 ##### END PROJECTIONS #####
 
 ##### MAIN DRIVER #####
@@ -281,6 +337,7 @@ function annealing!(f, b, A, y, tol, k, intercept;
     # initialize projection and check initial distance
     p = copy(b)
     pvec, idx = get_model_coefficients(p, intercept)
+    compute_projection! = ComputeProjection(b, p, pvec, idx, k)
     
     # check if svd(A) is needed
     if f isa typeof(sparse_direct!)
@@ -312,8 +369,7 @@ function annealing!(f, b, A, y, tol, k, intercept;
     end
     
     # Project b
-    copyto!(p, b)
-    project_sparsity_set!(pvec, idx, k)
+    compute_projection!(true)
     obj, dist = eval_objective(A, y, b, p, rho, k, intercept)
     copyto!(b, p)
     
@@ -358,17 +414,19 @@ function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol:
     b_old = extras.b_old                                # Nesterov acceleration
 
     # initialize worker arrays
-    Ab = buffer[1]; mul!(Ab, A, b)
+    Ab = buffer[1]
 
     # initialize projection
-    copyto!(p, b)
-    project_sparsity_set!(pvec, idx, k)
+    compute_projection! = ComputeProjection(b, p, pvec, idx, k)
+    compute_projection!(true)
     
     # initialize objective
-    old, dist = eval_objective(Ab, y, b, p, rho, k, intercept)
+    evaluate_objective! = EvaluateObjective(Ab, A, b, y, p, rho, k, intercept)
+    old, dist = evaluate_objective!(true)
     
     # initialize worker array for Nesterov acceleration
     copyto!(b_old, b)
+    apply_nesterov! = ApplyNesterov(b, b_old)
     nest_iter = 1
 
     for iter = 1:ninner
@@ -386,10 +444,8 @@ function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol:
         @. increment = -s * grad
         
         @. b = b + increment
-        copyto!(p, b)
-        project_sparsity_set!(pvec, idx, k)
-        mul!(Ab, A, b)
-        obj, dist = eval_objective(Ab, y, b, p, rho, k, intercept)
+        compute_projection!(true)
+        obj, dist = evaluate_objective!(true)
         # counter = 0
         
         # Apply step halving.
@@ -403,37 +459,20 @@ function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol:
 
                 # move forward
                 @. b = b + increment
-                copyto!(p, b)
-                project_sparsity_set!(pvec, idx, k)
-                mul!(Ab, A, b)
-                obj, dist = eval_objective(Ab, y, b, p, rho, k, intercept)
+                compute_projection!(true)
+                obj, dist = evaluate_objective!(true)
                 # counter += 1
             end
         end
         
         has_converged = abs(old - obj) < tol * (old + one(T)) # norm(grad) < tol
         
-        if  has_converged
+        if has_converged
             break
         else
-            if obj > old
-                copyto!(b_old, b)
-                nest_iter = 1
-            else            
-                # Nesterov acceleration.
-                γ = (nest_iter - 1) / (nest_iter + 2 - 1)
-                @inbounds for i in eachindex(b)
-                    xi = b[i]
-                    yi = b_old[i]
-                    zi = xi + γ * (xi - yi)
-                    b_old[i] = xi
-                    b[i] = zi
-                end
-                nest_iter += 1
-            end
+            nest_iter = apply_nesterov!(nest_iter, obj > old)
             old = obj
-            copyto!(p, b)
-            project_sparsity_set!(pvec, idx, k)
+            compute_projection!(true)
         end
         
     end
@@ -468,7 +507,7 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
     b_old = extras.b_old                                # Nesterov acceleration
     
     # initialize worker arrays
-    Ab = buffer[1]; mul!(Ab, A, b)
+    Ab = buffer[1]
     d2 = buffer[2]
     @inbounds for i in eachindex(s)
         d2[i] = (s[i] / m) / (s[i]^2 / m + rho)
@@ -478,14 +517,16 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
     D2 = Diagonal(d2)
     
     # initialize projection
-    copyto!(p, b)
-    project_sparsity_set!(pvec, idx, k)
+    compute_projection! = ComputeProjection(b, p, pvec, idx, k)
+    compute_projection!(true)
     
     # initialize objective
-    old, dist = eval_objective(Ab, y, b, p, rho, k, intercept)
+    evaluate_objective! = EvaluateObjective(Ab, A, b, y, p, rho, k, intercept)
+    old, dist = evaluate_objective!(true)
     
     # initialize worker array for Nesterov acceleration
     copyto!(b_old, b)
+    apply_nesterov! = ApplyNesterov(b, b_old)
     nest_iter = 1
 
     for iter = 1:ninner
@@ -496,34 +537,18 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
         update_beta!(b, btmp, U, V, D1, D2, z, p) # b == p after this update
         
         # update objective
-        project_sparsity_set!(pvec, idx, k)
-        mul!(Ab, A, b)
-        obj, dist = eval_objective(Ab, y, b, p, rho, k, intercept)
+        compute_projection!(false)
+        obj, dist = evaluate_objective!(true)
         
         # check convergence
         has_converged = abs(old - obj) < tol * (old + one(T)) # norm(grad) < tol
         
-        if  has_converged
+        if has_converged
             break
         else
-            if obj > old
-                copyto!(b_old, b)
-                nest_iter = 1
-            else
-                # Nesterov acceleration.
-                γ = (nest_iter - 1) / (nest_iter + 2 - 1)
-                @inbounds for i in eachindex(b)
-                    xi = b[i]
-                    yi = b_old[i]
-                    zi = xi + γ * (xi - yi)
-                    b_old[i] = xi
-                    b[i] = zi
-                end
-                nest_iter += 1
-            end
+            nest_iter = apply_nesterov!(nest_iter, obj > old)
             old = obj
-            copyto!(p, b)
-            project_sparsity_set!(pvec, idx, k)
+            compute_projection!(true)
         end  
     end
     verbose && print(iters,"  ",obj,"  ",dist)
