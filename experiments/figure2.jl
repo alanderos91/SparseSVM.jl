@@ -33,20 +33,18 @@ function subset_max_accuracy(df, col)
     )
 end
 
-# FDR; 1 - PPV adjusted for prevalence p
+# FDR; adjusted for prevalence p
 function FDR(TP, FP, TN, FN, p)
-    TPR = TP / (TP + FN)
-    TNR = TN / (TN + FP)
-    PPV = TPR * p / ( TPR * p + (1 - TNR) * (1 - p) )
-    return 100 * (isnan(PPV) ? one(PPV) : 1 - PPV)
+    TPR = TP / (TP + FN) # sensitivity
+    FPR = FP / (TN + FP) # 1 - specificity
+    return 100 * FPR * (1-p) / ( TPR * p + FPR * (1-p) )
 end
 
-# FOR 1 - NPV adjusted for prevalence p
+# FOR; adjusted for prevalence p
 function FOR(TP, FP, TN, FN, p)
-    TPR = TP / (TP + FN)
-    TNR = TN / (TN + FP)
-    NPV = TNR * (1 - p) / ( TNR * (1 - p) + (1 - TPR) * p )
-    return 100 * (isnan(NPV) ? one(NPV) : 1 - NPV)
+    TNR = TN / (TN + FP) # specificity
+    FNR = FN / (TP + FN) # 1 - sensitivity
+    return 100 * FNR * p / ( FNR * p + TNR * (1-p) )
 end
 
 function figure2a(MM_df, SD_df)
