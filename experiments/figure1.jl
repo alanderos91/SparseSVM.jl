@@ -1,12 +1,15 @@
-using Dates, DataFrames, CSV, Statistics, Plots, StatsPlots
+using Dates, DataFrames, CSV, Statistics, Plots, StatsPlots, LaTeXStrings
 
+const DATASETS = ["synthetic", "spiral", "letter-recognition", "TCGA-PANCAN-HiSeq"]
 const PALETTE = palette(:tab10)
 const MM_COLOR = PALETTE[1]
 const SD_COLOR = PALETTE[2]
 
 default(:foreground_color_legend, nothing)
 default(:background_color_legend, nothing)
-default(:legendfontsize, 6)
+default(:fontfamily, "Computer Modern")
+default(:dpi, 600)
+default(:legendfontsize, 8)
 
 const SELECTED_COLS = [:sv, :obj, :dist, :test_acc]
 
@@ -30,12 +33,16 @@ get_randomized_subset(df) = filter(:trial => x -> x > 0, df)
 
 function figure1(df)
     subplot_label = Dict(
-    :sv => "no. support vectors",
+    :sv => "# support vectors",
     :obj => "penalized objective",
     :dist => "squared distance",
     :test_acc => "test accuracy (%)",
     )
     w, h = default(:size)
+
+    yscale = [:log10, :log10, :log10, :identity]
+    legend = [:topright, nothing, nothing, nothing]
+    ylimits = [:auto, :auto, :auto, (60, 105)]
 
     # Initialize the plot
     fig = plot(layout=grid(2,2), legend=false, grid=false, size=(4*w, h))
@@ -43,53 +50,58 @@ function figure1(df)
         # Add boxplots for each metric.
         @df df groupedboxplot!(fig, string.(:dataset), cols(metric),
             title=subplot_label[metric],
-            legend=:outerright,
+            legend=legend[i],
             bar_width=0.4,
             markerstrokewidth=0,
             group=:algorithm,
-            yscale=i==2 || i==3 ? :log10 : :identity,
+            yscale=yscale[i],
+            ylims=ylimits[i],
             subplot=i,
             size=(2*w, h),
+            fontfamily="Computer Modern"
         )
     end
     return fig
 end
 
-# Get script arguments.
-idir = ARGS[1]
-odir = ARGS[2]
-datasets = ARGS[3:end]
+function main()
+    # Get script arguments.
+    idir = ARGS[1]
+    odir = ARGS[2]
 
-df = DataFrame()
+    global DATASETS
 
-for (i, dataset) in enumerate(datasets)
-    global df
+    df = DataFrame()
 
-    dir = joinpath(idir, dataset)
-    files = readdir(dir, join=true)
-    
-    # Filter for Experiment 1.
-    filter!(is_valid_file, files)
+    for (i, dataset) in enumerate(DATASETS)
+        dir = joinpath(idir, dataset)
+        files = readdir(dir, join=true)
+        
+        # Filter for Experiment 1.
+        filter!(is_valid_file, files)
 
-    # Filter for latest results.
-    MM_file, SD_file = filter_latest(files)
+        # Filter for latest results.
+        MM_file, SD_file = filter_latest(files)
 
-    println("""
-        Processing...
-            - MM file: $(MM_file)
-            - SD file: $(SD_file)
-    """
-    )
+        println("""
+            Processing...
+                - MM file: $(MM_file)
+                - SD file: $(SD_file)
+        """
+        )
 
-    MM_df = CSV.read(MM_file, DataFrame)
-    add_columns!(MM_df, :MM, dataset)
-    df = vcat(df, get_randomized_subset(MM_df))
+        MM_df = CSV.read(MM_file, DataFrame)
+        add_columns!(MM_df, :MM, dataset)
+        df = vcat(df, get_randomized_subset(MM_df))
 
-    SD_df = CSV.read(SD_file, DataFrame)
-    add_columns!(SD_df, :SD, dataset)
-    df = vcat(df, get_randomized_subset(SD_df))
+        SD_df = CSV.read(SD_file, DataFrame)
+        add_columns!(SD_df, :SD, dataset)
+        df = vcat(df, get_randomized_subset(SD_df))
+    end
+
+    fig = figure1(df)
+
+    savefig(fig, joinpath(odir, "Fig1.png"))
 end
 
-fig = figure1(df)
-
-savefig(fig, joinpath(odir, "Fig1.png"))
+main()

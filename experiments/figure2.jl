@@ -1,4 +1,4 @@
-using Dates, DataFrames, CSV, Statistics, Plots, StatsPlots
+using Dates, DataFrames, CSV, Statistics, Plots, StatsPlots, LaTeXStrings
 
 const PALETTE = palette(:tab10)
 const MM_COLOR = PALETTE[1]
@@ -6,7 +6,9 @@ const SD_COLOR = PALETTE[2]
 
 default(:foreground_color_legend, nothing)
 default(:background_color_legend, nothing)
-default(:legendfontsize, 6)
+default(:fontfamily, "Computer Modern")
+default(:dpi, 600)
+default(:legendfontsize, 8)
 
 ##### helper functions #####
 function is_valid_file(file)
@@ -24,137 +26,115 @@ function add_column!(df, alg)
     insertcols!(df, 1, :algorithm => alg)
 end
 
-# Positive and Negative Predictive Value (PPV, NPV); interpreted as posterior probability
-function ppv(TP, FP, TN, FN, p)
-    TPR = TP / (TP + FN)
-    TNR = TN / (TN + FP)
-    PPV = 100 * TPR * p / ( TPR * p + (1 - TNR) * (1 - p) )
-    return isnan(PPV) ? zero(PPV) : PPV
+function subset_max_accuracy(df, col)
+    idx = [argmax(gdf.test_acc) for gdf in groupby(df, col)]
+    DataFrame(
+        gdf[idx[i],:] for (i,gdf) in enumerate(groupby(df, col))
+    )
 end
 
-function npv(TP, FP, TN, FN, p)
+# FDR; 1 - PPV adjusted for prevalence p
+function FDR(TP, FP, TN, FN, p)
     TPR = TP / (TP + FN)
     TNR = TN / (TN + FP)
-    NPV = 100 * TNR * (1 - p) / ( TNR * (1 - p) + (1 - TPR) * p )
-    return isnan(NPV) ? zero(NPV) : NPV
+    PPV = TPR * p / ( TPR * p + (1 - TNR) * (1 - p) )
+    return 100 * (isnan(PPV) ? one(PPV) : 1 - PPV)
+end
+
+# FOR 1 - NPV adjusted for prevalence p
+function FOR(TP, FP, TN, FN, p)
+    TPR = TP / (TP + FN)
+    TNR = TN / (TN + FP)
+    NPV = TNR * (1 - p) / ( TNR * (1 - p) + (1 - TPR) * p )
+    return 100 * (isnan(NPV) ? one(NPV) : 1 - NPV)
 end
 
 function figure2a(MM_df, SD_df)
     k0 = 50 # should get this from table
-
-    # underdetermined
-    df1 = vcat(
-        filter([:m, :n] => (m, n) -> m == 500 && n == 10^4, MM_df),
-        filter([:m, :n] => (m, n) -> m == 500 && n == 10^4, SD_df),
-    )
-
-    # overdetermined
-    df2 = vcat(
-        filter([:m, :n] => (m, n) -> m == 10^4 && n == 500, MM_df),
-        filter([:m, :n] => (m, n) -> m == 10^4 && n == 500, SD_df),
+    dimensions = (
+        (500, 10^4), # underdetermined 
+        (10^4, 500), # overdetermined
     )
 
     # Initialize the plot
-    sparsity = unique(df1.sparsity)
-    x_index = 1:length(sparsity)
-    x_ticks = (x_index, sparsity)
-    xs = repeat(x_index, 2)
-
     global MM_COLOR
     global SD_COLOR
     colors = [MM_COLOR SD_COLOR]
 
+    sparsity = unique(MM_df.sparsity)
+    x_index = 1:length(sparsity)
+    x_ticks = (x_index, sparsity)
+    xs = repeat(x_index, 2)
+
+    nrows = 3
+    ncols = 2
+
     w, h = default(:size)
-    fig = plot(layout=grid(2, 2), legend=:bottomright, grid=false, size=(1.2*w, 1.2*h),
+    fig = plot(layout=grid(nrows, ncols), grid=false, size=(1.2*w, 1.5*h),
         xticks=x_ticks,
         xrotation=45,
-        yticks=(0:20:100),
-        ylims=(0.0, 105.0),
-        )
-
-    ##### Row 1: predictive power #####
-    options = (
-        color=colors,
-        linestyle=:dash,
-        linewidth=3,
-        markershape=:circle,
-        markeralpha=0.5,
-        markersize=6,
-        markerstrokewidth=0,
     )
 
-    # underdetermined
-    @df df1 plot!(fig, xs, :test_acc;
-        title="m=500, n=10,000",
-        ylabel="test accuracy (%)",
-        group=:algorithm,
-        subplot=1,
-        options...
-        )
-    
-    # overdetermined
-    @df df2 plot!(fig, xs, :test_acc;
-        title="m=10,000, n=500",
-        group=:algorithm,
-        subplot=2,
-        options...
-        )    
+    get_ylabel(idx, text) = idx == 1 ? text : ""
 
-    ##### Row 2: estimation power #####
-    options = (
-        color=colors,
-        linestyle=:dash,
-        linewidth=3,
-        markeralpha=0.5,
-        markersize=6,
-        markerstrokewidth=0,
+    for (idx, (n, p)) in enumerate(dimensions)
+        col_shift = idx - 1
+
+        df = vcat(
+            filter([:m, :n] => (x, y) -> x == n && y == p, MM_df),
+            filter([:m, :n] => (x, y) -> x == n && y == p, SD_df),
+        )
+        prevalence = k0 / p
+        true_idx = findall(isapprox(1 - prevalence), sparsity ./ 100)
+
+        options = (
+            color=colors,
+            linestyle=:dash,
+            linewidth=3,
+            shape=[:circle :utriangle],
+            markeralpha=0.5,
+            markersize=6,
+            markerstrokewidth=0,
         )
 
-    # underdetermined
-    @df df1 plot!(fig, xs, ppv.(:TP, :FP, :TN, :FN, k0/10^4);
-        xlabel="sparsity (%)",
-        ylabel="estimation power (%)",
-        group=:algorithm,
-        shape=:circle,
-        subplot=3,
-        label=["PPV" ""],
-        options...
+        ##### Row 1: Predictive Power
+        sp = 1 + col_shift
+        @df df plot!(fig, xs, :test_acc;
+            group=:algorithm,
+            title=latexstring("n=$n,\\ p=$p"),
+            ylabel=get_ylabel(idx, "test accuracy (%)"),
+            ylims=(0, 105),
+            legend=:bottomright,
+            subplot=sp,
+            options...
         )
+        vline!(fig, true_idx, subplot=sp, label=nothing, lw=1, ls=:solid, color=:black)
 
-    @df df1 plot!(fig, xs, npv.(:TP, :FP, :TN, :FN, k0/10^4);
-        group=:algorithm,
-        shape=:utriangle,
-        subplot=3,
-        label=["NPV" ""],
-        options...
-    )
-
-    # overdetermined
-    @df df2 plot!(fig, xs, ppv.(:TP, :FP, :TN, :FN, k0/10^4);
-        xlabel="sparsity (%)",
-        group=:algorithm,
-        shape=:circle,
-        subplot=4,
-        label=["PPV" ""],
-        options...
+        ##### Row 2: FDR #####
+        sp = 1 + ncols + col_shift
+        @df df plot!(fig, xs, FDR.(:TP, :FP, :TN, :FN, prevalence);
+            group=:algorithm,
+            ylabel=get_ylabel(idx, "FDR (%)"),
+            ylims=(0, 105),
+            legend=:topright,
+            subplot=sp,
+            options...
         )
+        vline!(fig, true_idx, subplot=sp, label=nothing, lw=1, ls=:solid, color=:black)
 
-    @df df2 plot!(fig, xs, npv.(:TP, :FP, :TN, :FN, k0/10^4);
-        group=:algorithm,
-        shape=:utriangle,
-        subplot=4,
-        label=["NPV" ""],
-        options...
-    )
-
-    # add guides for true sparsity
-    true_sparsity = findall(isapprox(1-k0/10^4), sparsity ./ 100)
-    vline!(fig, true_sparsity, subplot=1, label=nothing, lw=1, ls=:solid, color=:black)
-    vline!(fig, true_sparsity, subplot=3, label=nothing, lw=1, ls=:solid, color=:black)
-
-    true_sparsity = findall(isapprox(1-k0/500), sparsity ./ 100)
-    vline!(fig, true_sparsity, subplot=2, label=nothing, lw=1, ls=:solid, color=:black)
-    vline!(fig, true_sparsity, subplot=4, label=nothing, lw=1, ls=:solid, color=:black)
+        ##### Row 3: FOR #####
+        sp = 1 + 2*ncols + col_shift
+        @df df plot!(fig, xs, FOR.(:TP, :FP, :TN, :FN, prevalence);
+            group=:algorithm,
+            xlabel="sparsity (%)",
+            ylabel=get_ylabel(idx, "FOR (%)"),
+            ylims=(0, 10),
+            legend=:topright,
+            subplot=sp,
+            options...
+        )
+        vline!(fig, true_idx, subplot=sp, label=nothing, lw=1, ls=:solid, color=:black)
+    end
 
     return fig
 end
@@ -162,105 +142,107 @@ end
 function figure2b(MM_df, SD_df)
     k0 = 50 # should get this from table
 
-    function subset_max_accuracy(df, col)
-        idx = [argmax(gdf.test_acc) for gdf in groupby(df, col)]
-        DataFrame(
-            gdf[idx[i],:] for (i,gdf) in enumerate(groupby(df, col))
+    dimension = ( (:m, :n, 500), (:n, :m, 500) )
+
+    df = [
+        # underdetermined
+        vcat(
+            subset_max_accuracy(filter(:m => x -> x == 500, MM_df), :n),
+            subset_max_accuracy(filter(:m => x -> x == 500, SD_df), :n),
+        ),
+        # overdetermined
+        vcat(
+            subset_max_accuracy(filter(:n => x -> x == 500, MM_df), :m),
+            subset_max_accuracy(filter(:n => x -> x == 500, SD_df), :m),
         )
-    end
-
-    # underdetermined
-    df1 = vcat(
-        subset_max_accuracy(filter(:m => m -> m == 500, MM_df), :n),
-        subset_max_accuracy(filter(:m => m -> m == 500, SD_df), :n),
-    )
-
-    # overdetermined
-    df2 = vcat(
-        subset_max_accuracy(filter(:n => n -> n == 500, MM_df), :m),
-        subset_max_accuracy(filter(:n => n -> n == 500, SD_df), :m),
-    )
+    ]
 
     # Initialize the plot
     global MM_COLOR
     global SD_COLOR
     colors = [MM_COLOR SD_COLOR]
 
+    nrows = 4
+    ncols = 2
+
     w, h = default(:size)
-    fig = plot(layout=grid(3, 2), legend=false, grid=false, size=(1.2*w, 1.2*h))
+    fig = plot(layout=grid(nrows, ncols), legend=:topleft, grid=false, size=(1.2*w, 1.5*h))
     options = (
-        legend=:topleft,
         xscale=:log10,
         color=colors,
         linestyle=:dash,
         linewidth=3,
-        markershape=:circle,
+        markershape=[:circle :utriangle],
         markeralpha=0.5,
         markersize=6,
         markerstrokewidth=0,
     )
+    
+    xlabel = ["# features (p)", "# samples (n)"]
+    get_ylabel(idx, text) = idx == 1 ? text : ""
 
-    ##### Row 1: iterations
-    @df df1 plot!(fig, :n, :iter; group=:algorithm, subplot=1, title="m = 500", ylabel="iterations", options...)
-    @df df2 plot!(fig, :m, :iter; group=:algorithm, subplot=2, title="n = 500", options...)
+    for idx in eachindex(df)
+        data = df[idx]
+        col_shift = idx - 1
+        fixed_dim, free_dim, fixed_val = dimension[idx]
+        title = latexstring(fixed_dim == :m ? :n : :p, " = ", fixed_val)
+        dimension_vals = repeat(unique(data[!, free_dim]), 2)
+        
+        feature_vals = unique(data[!, :n])
+        if length(feature_vals) > 1
+            prevalence = k0 ./ repeat(feature_vals, 2)
+        else
+            prevalence = k0 / feature_vals[1]
+        end
 
-    ##### Row 2: time
-    @df df1 plot!(fig, :n, :time; group=:algorithm, subplot=3, ylabel="time (s)", options...)
-    @df df2 plot!(fig, :m, :time; group=:algorithm, subplot=4, options...)
+        ##### Row 1: Iterations #####
+        sp = 1 + col_shift
+        @df data plot!(fig, dimension_vals, :iter; group=:algorithm, subplot=sp, title=title, ylabel=get_ylabel(idx, "iterations"), options...)
 
-    ##### Row 3: estimation power
-    ms = repeat(unique(df2.m), 2)
-    ns = repeat(unique(df1.n), 2)
+        ##### Row 2: Time #####
+        sp = 1 + ncols + col_shift
+        @df data plot!(fig, dimension_vals, :time; group=:algorithm, subplot=sp, ylabel=get_ylabel(idx, "time (s)"), yscale=:log10, options...)
 
-    options = (
-        legend=:right,
-        ylims=(0.0, 105.0),
-        xscale=:log10,
-        color=colors,
-        linestyle=:dash,
-        linewidth=3,
-        markeralpha=0.5,
-        markersize=6,
-        markerstrokewidth=0,
-        )
+        ##### Row 3: FDR #####
+        sp = 1 + 2*ncols + col_shift
+        @df data plot!(fig, dimension_vals, FDR.(:TP, :FP, :TN, :FN, prevalence); group=:algorithm, subplot=sp, ylabel=get_ylabel(idx, "FDR (%)"), ylims=(0, 105), options...)
 
-    # underdetermined
-    @df df1 plot!(fig, ns, ppv.(:TP, :FP, :TN, :FN, k0 ./ cols(:n)); group=:algorithm, subplot=5, xlabel="no. features (n)", ylabel="estimation power (%)", markershape=:circle, label=["PPV" ""], options...)
-    @df df1 plot!(fig, ms, npv.(:TP, :FP, :TN, :FN, k0 / 500); group=:algorithm, subplot=5, markershape=:utriangle, label=["NPV" ""], options...)
-
-    # overdetermined
-    @df df2 plot!(fig, ns, ppv.(:TP, :FP, :TN, :FN, k0 ./ cols(:n)); group=:algorithm, subplot=6, xlabel="no. samples (m)", markershape=:circle, label=["PPV" ""], options...)
-    @df df2 plot!(fig, ms, npv.(:TP, :FP, :TN, :FN, k0 / 500); group=:algorithm, subplot=6, markershape=:utriangle, label=["NPV" ""], options...)
+        ##### Row 4: FOR #####
+        sp = 1 + 3*ncols + col_shift
+        @df data plot!(fig, dimension_vals, FOR.(:TP, :FP, :TN, :FN, prevalence); group=:algorithm, subplot=sp, ylabel=get_ylabel(idx, "FOR (%)"), ylims=(0, 10), xlabel=xlabel[idx], options...)
+    end
 
     return fig
 end
 
-# Get script arguments.
-idir = ARGS[1]
-odir = ARGS[2]
+function main()
+    # Get script arguments.
+    idir = ARGS[1]
+    odir = ARGS[2]
 
-dir = joinpath(idir, "experiment2")
-files = readdir(dir, join=true)
-    
-# Filter for lastest results for Experiment 2.
-filter!(is_valid_file, files)
-MM_file, SD_file = filter_latest(files)
+    dir = joinpath(idir, "experiment2")
+    files = readdir(dir, join=true)
+        
+    # Filter for lastest results for Experiment 2.
+    filter!(is_valid_file, files)
+    MM_file, SD_file = filter_latest(files)
 
-println("""
-    Processing...
-        - MM file: $(MM_file)
-        - SD file: $(SD_file)
-"""
-)
+    println("""
+        Processing...
+            - MM file: $(MM_file)
+            - SD file: $(SD_file)
+    """
+    )
 
-MM_df = CSV.read(MM_file, DataFrame)
-add_column!(MM_df, :MM)
+    MM_df = CSV.read(MM_file, DataFrame)
+    add_column!(MM_df, :MM)
 
-SD_df = CSV.read(SD_file, DataFrame)
-add_column!(SD_df, :SD)
+    SD_df = CSV.read(SD_file, DataFrame)
+    add_column!(SD_df, :SD)
 
-fig2A = figure2a(MM_df, SD_df)
-savefig(fig2A, joinpath(odir, "Fig2A.png"))
+    fig2A = figure2a(MM_df, SD_df)
+    savefig(fig2A, joinpath(odir, "Fig2A.png"))
 
-fig2B = figure2b(MM_df, SD_df)
-savefig(fig2B, joinpath(odir, "Fig2B.png"))
+    fig2B = figure2b(MM_df, SD_df)
+    savefig(fig2B, joinpath(odir, "Fig2B.png"))
+end
