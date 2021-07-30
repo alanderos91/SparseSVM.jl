@@ -27,7 +27,7 @@ function aggregate_metrics(df)
 end
 
 function subset_max_accuracy(df)
-    idx = argmax(0.25*df.train_acc + 0.25*df.val_acc + 0.5*df.test_acc)
+    idx = argmax(df.val_acc)
     result = df[idx, :]
     result.time = sum(df.time)
     return DataFrame(result)

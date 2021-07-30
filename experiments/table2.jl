@@ -12,11 +12,10 @@ function filter_latest(files)
 end
 
 const METRICS = [
-    :iter, :time, :obj, :test_acc
+    :iter, :time, :obj, :val_acc, :test_acc
 ]
 
 function aggregate_metrics(df)
-    global METRICS
     gdf = groupby(df, :sparsity)
     combine(gdf,
         [:alg, :iter, :time, :obj, :train_acc, :val_acc, :test_acc] =>
@@ -25,13 +24,14 @@ function aggregate_metrics(df)
             iter=median(a),
             time=median(b),
             obj=median(c),
-            test_acc=0.25*mean(d)+0.25*mean(e)+0.5*mean(f),
+            val_acc=mean(e),
+            test_acc=mean(f),
         )) =>
     AsTable)
 end
 
 function subset_max_accuracy(df)
-    result = df[argmax(df.test_acc), :]
+    result = df[argmax(df.val_acc), :]
     result.time = sum(df.time)
     result.iter = sum(df.iter)
     return DataFrame(result)
@@ -68,6 +68,7 @@ function table2(idir, datasets)
     end
 
     # Tidy up table.
+    global METRICS
     sort!(result, [:dataset, :alg])
     select!(result, [:dataset; :alg; :sparsity; METRICS])
 
@@ -92,7 +93,7 @@ function table2(idir, datasets)
     # Create header and formatting function.
     header = [
         "Dataset", "Alg.", latexstring(L"s", " (\\%)"), "Total Iter.", "Total Time (s)",
-        L"h_{\rho}(\bbeta)", "Test (\\%)"
+        "Objective", "V (\\%)", "T (\\%)"
     ]
     fmt(x) = x # default: no formatting
     fmt(x::Number) = latexstring(x) # make numbers a LaTeXString
