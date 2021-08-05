@@ -325,14 +325,15 @@ function trainMM!(classifier::MultiClassifier{T}, Amat, f, tol, s;
     total_iters = 0
     total_obj = zero(T)
     total_dist = zero(T)
+    total_gradsq = zero(T)
     M = length(classifier.svm)
     for (i, svm) in enumerate(classifier.svm)
         if verbose
             label2target = svm.data.label2target
             pos = label2target[one(T)]
             neg = label2target[-one(T)]
-            println("Training $(pos) vs $(neg)")
             println()
+            println("Training $(pos) vs $(neg)")
         end
         # check if design matrix is already allocated
         if Amat[i] isa Nothing
@@ -340,13 +341,14 @@ function trainMM!(classifier::MultiClassifier{T}, Amat, f, tol, s;
         else
             A = Amat[i]
         end
-        iters, obj, dist = trainMM!(svm, A, f, tol, s; verbose=verbose, fullsvd=fullsvd[i], kwargs...)
+        iters, obj, dist, gradsq = trainMM!(svm, A, f, tol, s; verbose=verbose, fullsvd=fullsvd[i], kwargs...)
         total_iters += iters
         total_obj += obj / M
         total_dist += dist / M
+        total_gradsq += gradsq / M
         verbose && println()
     end
-    return total_iters, total_obj, total_dist
+    return total_iters, total_obj, total_dist, total_gradsq
 end
 
 ##### UTILS #####

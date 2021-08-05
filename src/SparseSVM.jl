@@ -98,7 +98,7 @@ function (F::ApplyNesterov)(n, unstable)
         n = 1
     else # Nesterov acceleration
         γ = (n - 1) / (n + 3 - 1)
-        @inbounds for i in eachindex(b)
+        @inbounds @simd for i in eachindex(b)
             xi = b[i]
             yi = b_old[i]
             zi = xi + γ * (xi - yi)
@@ -117,9 +117,17 @@ end
 Evaluate ``\\frac{1}{2} \\left[ \\frac{1}{m} \\|y - A \\beta\\|^{2} + \\frac{\\rho}{n-k+1} \\dist(b, S_{k})^{2} \\right]``.
 Assumes `Ab = A * b`. 
 """
-function eval_objective(Ab::AbstractVector, y, b, p, rho, k, intercept)
+function eval_objective(grad, Ab, A, y, z, b, p, rho, k)
     T = eltype(Ab)
     m, n = length(y), length(b)
+
+    compute_z!(z, Ab, y)
+
+    #
+    # 1/m ∑ max(0, 1 - yᵢ (A*b)ᵢ)^2; empirical risk
+    #
+    axpy!(-one(T), z, Ab)
+    obj = dot(Ab, Ab) / m
 
     #
     # rho / (n-k+1) * |P(b) - b|^2 distance penalty; could reduce to BLAS.axpby!
@@ -131,46 +139,30 @@ function eval_objective(Ab::AbstractVector, y, b, p, rho, k, intercept)
     # 3. P(b) has k or k+1 non-zero entries so P(b) - b has n-k non-zero entries.
     # 4. The extra 1 is used avoid indeterminate form 0 / 0.
     #
-    dist = zero(T)
-    for i in eachindex(b)
-        dist = dist + (p[i] - b[i])^2
-    end
-    dist = dist / (n - k + 1)
+    @. grad = b - p
+    dist = dot(grad, grad) / (n - k + 1)
 
-    #
-    # 1/m ∑ max(0, 1 - yᵢ (A*b)ᵢ)^2; empirical risk
-    #
-    obj = zero(T)
-    for i in eachindex(y)
-        obj = obj + max(one(T) - y[i] * Ab[i], zero(T))^2
-    end
-    obj = obj / m
+    # 1/m A' * (A*b - z) + rho / (n-k+1) * (b - p)
+    mul!(grad, A', Ab, 1/m, rho / (n-k+1))
 
-    return 1//2 * (obj + rho * dist), 1//2 * dist
+    return 1//2 * (obj + rho * dist), 1//2 * dist, dot(grad, grad)
 end
 
-"""
-`eval_objective(A::AbstractMatrix, y, b, p, rho, k, intercept)`
-
-Evaluate ``\\frac{1}{2} \\left[ \\frac{1}{m} \\|y - A \\beta\\|^{2} + \\frac{\\rho}{n-k+1} \\dist(b, S_{k})^{2} \\right]``.
-Assumes `A` is the design matrix.
-"""
-eval_objective(A::AbstractMatrix, y, b, p, rho, k, intercept) = eval_objective(A*b, y, b, p, rho, k, intercept)
-
 struct EvaluateObjective{T}
-    Ab::Vector{T}
     A::Matrix{T}
-    b::Vector{T}
     y::Vector{T}
+    z::Vector{T}
+    b::Vector{T}
     p::Vector{T}
     rho::T
     k::Int
-    intercept::Bool
+    grad::Vector{T}
+    Ab::Vector{T}
 end
 
 function (F::EvaluateObjective)(needs_update)
     if needs_update mul!(F.Ab, F.A, F.b) end
-    return eval_objective(F.Ab, F.y, F.b, F.p, F.rho, F.k, F.intercept)
+    return eval_objective(F.grad, F.Ab, F.A, F.y, F.z, F.b, F.p, F.rho, F.k)
 end
 
 ##### END OBJECTIVE #####
@@ -273,19 +265,19 @@ function _init_weights_!(b, X, y, intercept)
     m, n = size(X)
     idx = ifelse(intercept, 1:n-1, 1:n)
     y_bar = mean(y)
-    for j in idx
+    @inbounds for j in idx
         @views x = X[:, j]
         x_bar = mean(x)
         A = zero(eltype(b))
         B = zero(eltype(b))
-        for i in 1:m
+        @inbounds for i in 1:m
             A += (x[i] - x_bar) * (y[i] - y_bar)
             B += (x[i] - x_bar) ^2
         end
         b[j] = B == 0 ? 1e-6*rand() : A / B
     end
     if intercept
-        b[end] = y_bar
+        @inbounds b[end] = y_bar
     end
     return b
 end
@@ -331,14 +323,9 @@ function annealing!(f, b, A, y, tol, k, intercept;
     init && _init_weights_!(b, A, y, intercept)
     rho = rho_init
     T = eltype(A) # should be more careful here to make sure BLAS works correctly
-    (obj, dist, old, iters) = (zero(T), zero(T), zero(T), 0)
+    (obj, dist, old, iters, gradsq) = (zero(T), zero(T), zero(T), 0, zero(T))
     m, n = size(A)
 
-    # initialize projection and check initial distance
-    p = copy(b)
-    pvec, idx = get_model_coefficients(p, intercept)
-    compute_projection! = ComputeProjection(b, p, pvec, idx, k)
-    
     # check if svd(A) is needed
     if f isa typeof(sparse_direct!)
         extras = alloc_svd_and_extras(A, intercept, fullsvd=fullsvd)
@@ -346,14 +333,22 @@ function annealing!(f, b, A, y, tol, k, intercept;
         extras = alloc_extras(A, intercept)
     end
 
+    # initialize projection and check initial distance
+    p, z, grad, Ab = extras.p, extras.z, extras.grad, extras.buffer[1]
+    pvec, idx = get_model_coefficients(p, intercept)
+    compute_projection! = ComputeProjection(b, p, pvec, idx, k)
+    evaluate_objective! = EvaluateObjective(A, y, z, b, p, rho, k, grad, Ab)
+
     verbose && println()
     for n in 1:nouter
         # solve problem for fixed rho
         if verbose
             print(n,"  ")
-            _, cur_iters, obj, dist = @time f(b, A, y, rho, tol, k, intercept, extras, ninner=ninner, verbose=true)
+            _, cur_iters, obj, dist, gradsq = @time f(b, A, y, rho, tol, k, intercept, extras,
+                ninner=ninner, verbose=true)
         else
-            _, cur_iters, obj, dist = f(b, A, y, rho, tol, k, intercept, extras, ninner=ninner, verbose=false)
+            _, cur_iters, obj, dist, gradsq = f(b, A, y, rho, tol, k, intercept, extras, 
+                ninner=ninner, verbose=false)
         end
         
         iters += cur_iters
@@ -370,17 +365,18 @@ function annealing!(f, b, A, y, tol, k, intercept;
     
     # Project b
     compute_projection!(true)
-    obj, dist = eval_objective(A, y, b, p, rho, k, intercept)
+    obj, dist, gradsq = evaluate_objective!(true)
     copyto!(b, p)
     
     if verbose
         print("\niters = ", iters)
         print("\ndist  = ", dist)
         print("\nobj   = ", obj)
+        print("\n|∇|²  = ", gradsq)
         print("\nTotal Time: ")
     end
 
-    return iters, obj, dist
+    return iters, obj, dist, gradsq
 end
 
 export annealing, annealing!
@@ -404,80 +400,59 @@ Solve the distance-penalized SVM with fixed `rho` via steepest descent.
 This version updates the coefficient vector `b` and can be used with `annealing`.
 """
 function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, intercept::Bool, extras; ninner::Int=1000, verbose::Bool=false) where T <: AbstractFloat
-    (obj, old, iters) = (zero(T), zero(T), 0)
+    (obj, old, iters, dist, gradsq) = (zero(T), zero(T), 0, zero(T), zero(T))
     m, n = size(A)
 
-    # unpack
+    # Unpack
     z, buffer = extras.z, extras.buffer                 # other worker arrays
-    grad, increment = extras.grad, extras.increment     # descent direction
+    grad = extras.grad                                  # gradient
     p, pvec, idx = extras.p, extras.pvec, extras.idx    # projection
     b_old = extras.b_old                                # Nesterov acceleration
 
-    # initialize worker arrays
+    # Initialize worker arrays.
     Ab = buffer[1]
 
-    # initialize projection
+    # Initialize projection.
     compute_projection! = ComputeProjection(b, p, pvec, idx, k)
-    compute_projection!(true)
     
-    # initialize objective
-    evaluate_objective! = EvaluateObjective(Ab, A, b, y, p, rho, k, intercept)
-    old, dist = evaluate_objective!(true)
+    # Initialize objective, distance, and gradient.
+    evaluate_objective! = EvaluateObjective(A, y, z, b, p, rho, k, grad, Ab)
     
-    # initialize worker array for Nesterov acceleration
+    # Initialize worker array for Nesterov acceleration.
     copyto!(b_old, b)
     apply_nesterov! = ApplyNesterov(b, b_old)
     nest_iter = 1
 
     for iter = 1:ninner
         iters = iters + 1
-        @. grad = (b - p) # penalty contribution
-        @inbounds for i in eachindex(z)
-            yi, Abi = y[i], Ab[i]
-            z[i] = ifelse(yi * Abi ≤ 1, Abi - yi, zero(eltype(z)))
-        end
-        mul!(grad, A', z, 1/m, rho / (n-k+1))
-        s = dot(grad, grad) # optimal step size
+
+        compute_projection!(true)
+        evaluate_objective!(true)
+
+        # Compute optimal step size.
+        s = dot(grad, grad)
         mul!(Ab, A, grad)
         t = dot(Ab, Ab)
         s = s / (1/m*t + rho/(n-k+1) * s + eps()) # add small bias to prevent NaN
-        @. increment = -s * grad
-        
-        @. b = b + increment
-        compute_projection!(true)
-        obj, dist = evaluate_objective!(true)
-        # counter = 0
-        
-        # Apply step halving.
-        for _ in 0:3
-            if obj < old
-                break
-            else
-                # backtrack
-                @. b = b - increment
-                @. increment = 0.5 * increment
 
-                # move forward
-                @. b = b + increment
-                compute_projection!(true)
-                obj, dist = evaluate_objective!(true)
-                # counter += 1
-            end
-        end
+        # Update estimates.
+        @. b = b - s * grad
+
+        # Update objective, distance, and gradient.
+        compute_projection!(true)
+        obj, dist, gradsq = evaluate_objective!(true)
         
-        has_converged = abs(old - obj) < tol * (old + one(T)) # norm(grad) < tol
-        
+        # Assess convergence.
+        has_converged = gradsq < tol
         if has_converged
             break
         else
             nest_iter = apply_nesterov!(nest_iter, obj > old)
             old = obj
-            compute_projection!(true)
         end
-        
     end
-    verbose && print(iters,"  ",obj,"  ",dist)
-    return b, iters, obj, dist
+    verbose && print(iters,"  ",obj,"  ",dist, "  ",gradsq)
+    return b, iters, obj, dist, gradsq
 end
 
 """
@@ -497,16 +472,17 @@ Solve the distance-penalized SVM with fixed `rho` via normal equations.
 This version updates the coefficient vector `b` and can be used with `annealing`.
 """
 function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, intercept::Bool, extras; ninner::Int=1000, verbose::Bool=false) where T <: AbstractFloat
-    (obj, old, iters) = (zero(T), zero(T), 0)
+    (obj, old, iters, dist, gradsq) = (zero(T), zero(T), 0, zero(T), zero(T))
     m, n = size(A)
     
-    # unpack
+    # Unpack
     U, s, V = extras.U, extras.s, extras.V              # SVD
+    grad = extras.grad                                  # gradient
     z, buffer = extras.z, extras.buffer                 # other worker arrays
     p, pvec, idx = extras.p, extras.pvec, extras.idx    # projection
     b_old = extras.b_old                                # Nesterov acceleration
     
-    # initialize worker arrays
+    # Initialize worker arrays.
     Ab = buffer[1]
     d2 = buffer[2]
     @inbounds for i in eachindex(s)
@@ -516,13 +492,11 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
     D1 = Diagonal(s)
     D2 = Diagonal(d2)
     
-    # initialize projection
+    # Initialize projection.
     compute_projection! = ComputeProjection(b, p, pvec, idx, k)
-    compute_projection!(true)
     
-    # initialize objective
-    evaluate_objective! = EvaluateObjective(Ab, A, b, y, p, rho, k, intercept)
-    old, dist = evaluate_objective!(true)
+    # Initialize objective, distance, and gradient.
+    evaluate_objective! = EvaluateObjective(A, y, z, b, p, rho, k, grad, Ab)
     
     # initialize worker array for Nesterov acceleration
     copyto!(b_old, b)
@@ -532,31 +506,31 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
     for iter = 1:ninner
         iters = iters + 1
         
-        # Update estimates
-        compute_z!(z, Ab, y)
+        compute_projection!(true)
+        evaluate_objective!(true)
+
+        # Update estimates.
         update_beta!(b, btmp, U, V, D1, D2, z, p) # b == p after this update
         
-        # update objective
+        # Update objective, distance, and gradient.
         compute_projection!(false)
-        obj, dist = evaluate_objective!(true)
+        obj, dist, gradsq = evaluate_objective!(true)
         
-        # check convergence
-        has_converged = abs(old - obj) < tol * (old + one(T)) # norm(grad) < tol
-        
+        # Assess convergence.
+        has_converged = gradsq < tol
         if has_converged
             break
         else
             nest_iter = apply_nesterov!(nest_iter, obj > old)
             old = obj
-            compute_projection!(true)
         end  
     end
     verbose && print(iters,"  ",obj,"  ",dist)
-    return b, iters, obj, dist
+    return b, iters, obj, dist, gradsq
 end
 
 function compute_z!(z, Ab, y)
-    @inbounds for i in eachindex(z)
+    @inbounds @simd for i in eachindex(z)
         yi, Abi = y[i], Ab[i]
         z[i] = ifelse(yi*Abi ≤ 1, yi, Abi)
     end
@@ -572,13 +546,13 @@ end
     lmul!(D1, btmp)
 
     # btmp = U' z - btmp
-    mul!(btmp, U_block', z, 1.0, -1.0)
+    mul!(btmp, U_block', z, true, -1.0)
 
     # btmp = [ (1/m Σ² + ρI)⁻¹ 1/m Σ ] btmp
     lmul!(D2, btmp)
 
     # b = p = p + V'b
-    mul!(p, V_block, btmp, 1.0, 1.0)
+    mul!(p, V_block, btmp, true, true)
     copyto!(b, p)
 end
 
@@ -591,19 +565,18 @@ function alloc_extras(A, intercept)
     z = similar(A, axes(A, 1)) # stores yᵢ * (Xb)ᵢ or yᵢ
 
     grad = similar(A, axes(A, 2)) # gradient ∇g
-    increment = similar(grad)     # steepest descent direction, -γ*∇g
 
     p = similar(A, axes(A, 2))                       # projection of b, P(b)
     pvec, idx = get_model_coefficients(p, intercept) # non-intercept coefficients
 
     b_old = similar(A, axes(A, 2)) # worker array for Nesterov acceleration
 
-    buffer = Vector{Vector{T}}(undef, 1)
+    buffer = Vector{Vector{T}}(undef, 3)
     buffer[1] = similar(A, axes(A, 1))  # for A * b
     
-    extras = (z=z, grad=grad, increment=increment, p=p, pvec=pvec, idx=idx, b_old=b_old, buffer=buffer)
+    extras = (z=z, grad=grad, p=p, pvec=pvec, idx=idx, b_old=b_old, buffer=buffer)
 
-    return extras    
+    return extras
 end
 
 """
@@ -624,6 +597,8 @@ function alloc_svd_and_extras(A, intercept; fullsvd::Union{Nothing,SVD}=nothing)
 
     z = similar(A, axes(A, 1)) # stores yᵢ * (Xb)ᵢ or yᵢ
 
+    grad = similar(A, axes(A, 2)) # gradient ∇g
+
     p = similar(A, axes(A, 2))                       # projection of b, P(b)
     pvec, idx = get_model_coefficients(p, intercept) # non-intercept coefficients
 
@@ -634,7 +609,7 @@ function alloc_svd_and_extras(A, intercept; fullsvd::Union{Nothing,SVD}=nothing)
     buffer[2] = similar(s)              # for diagonal a^2 Σ / (a^2 Σ^2 + b^2 I)
     buffer[3] = similar(s)              # for updating β
     
-    extras = (U=U, s=s, V=V, z=z, p=p, pvec=pvec, idx=idx, b_old=b_old, buffer=buffer)
+    extras = (U=U, s=s, V=V, z=z, grad=grad, p=p, pvec=pvec, idx=idx, b_old=b_old, buffer=buffer)
 
     return extras
 end
