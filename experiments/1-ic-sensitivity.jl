@@ -2,7 +2,7 @@ include("common.jl")
 
 function run_experiment(fname, algorithm, dataset, ctype;
     ntrials::Int=100,
-    percent_train::Real=0.8,
+    proportion_train::Real=0.8,
     tol::Real=1e-6,
     s::Float64=0.5,
     nouter::Int=20,
@@ -20,7 +20,7 @@ function run_experiment(fname, algorithm, dataset, ctype;
         :dataset => dataset,
         :ctype => ctype,
         :ntrials => ntrials,
-        :percent_train => percent_train,
+        :proportion_train => proportion_train,
         :tol => tol,
         :s => s,
         :nouter => nouter,
@@ -49,7 +49,7 @@ function run_experiment(fname, algorithm, dataset, ctype;
     labeled_data = (X, y)
 
     # Create the train and test data sets.
-    (train_X, train_targets), (test_X, test_targets) = splitobs(labeled_data, at=percent_train, obsdim=1)
+    (train_X, train_targets), (test_X, test_targets) = splitobs(labeled_data, at=proportion_train, obsdim=1)
 
     # Process options
     f = get_algorithm_func(algorithm)
@@ -135,7 +135,7 @@ for example in examples
         # precompile
         tmpkwargs = (kwargs..., ninner=2, nouter=2,)
         run_experiment(fname, opt, example, ctype; tmpkwargs...)
-        cleanup_precompile(fname)
+        cleanup_precompile(example, fname)
 
         # run
         run_experiment(fname, opt, example, ctype; kwargs...)

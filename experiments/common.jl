@@ -100,7 +100,7 @@ end
 
 # other utils
 
-function cleanup_precompile(fname)
+function cleanup_precompile(dataset, fname)
     rm(joinpath("results", dataset, "$(fname).out"))
     rm(joinpath("results", dataset, "$(fname).log"))
 end

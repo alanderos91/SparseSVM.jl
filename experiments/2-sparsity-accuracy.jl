@@ -62,6 +62,7 @@ function run_experiment(fname, algorithm::AlgOption, y, X, beta0, grid;
         nouter::Int=20,
         ninner::Int=1000,
         mult::Real=1.2,
+        kwargs...
     )
     # Create the train and test data sets.
     labeled_data = (X, y)

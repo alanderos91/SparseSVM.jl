@@ -198,7 +198,7 @@ for example in examples
         run_experiment(fname, example, our_grid, their_grid, ctype;
             nfolds=10, tmpkwargs...)
     end
-    cleanup_precompile(fname)
+    cleanup_precompile(example, fname)
 
     # run
     fname = generate_filename(4, "all")

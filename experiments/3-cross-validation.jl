@@ -137,7 +137,7 @@ end
 for example in examples
     println("Running '$(example)' benchmark")
     fname = generate_filename(3, "all")
-    
+
     # options
     ctype, kwargs = OPTIONS[example]
     grid = SPARSITY_GRID[example]
@@ -147,7 +147,7 @@ for example in examples
     for opt in (SD, MM)
         run_experiment(fname, opt, example, grid, ctype; nfolds=10, tmpkwargs...)
     end
-    cleanup_precompile(fname)
+    cleanup_precompile(example, fname)
 
     # run
     for opt in (SD, MM)
