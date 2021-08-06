@@ -1,79 +1,6 @@
 # load common packages + functions
 include("common.jl")
-using LIBSVM
-import SparseSVM: Classifier, get_support_vecs, count_support_vecs
-import LIBSVM: set_params!, fit!
-
-# Binary case: % zeros in coefficients
-measure_model_sparsity(weights::AbstractVector) = 100 * count(isequal(0), weights) / length(weights)
-
-function measure_model_sparsity(clf::BinaryClassifier)
-    weights = clf.intercept ? clf.weights[1:end-1] : clf.weights
-    measure_model_sparsity(weights)
-end
-
-# Multi case: average % zeros in coefficients
-measure_model_sparsity(weights::AbstractMatrix) = mean(measure_model_sparsity(w) for w in eachcol(weights))
-
-function measure_model_sparsity(clf::MultiClassifier)
-    x = zeros(length(clf.svm))
-    for (i, svm) in enumerate(clf.svm)
-        x[i] = measure_model_sparsity(svm)
-    end
-    return mean(x)
-end
-
-struct LIBSVMClassifier{M} <: SparseSVM.Classifier
-    model::M
-end
-
-function (classifier::LIBSVMClassifier)(X::AbstractMatrix)
-    LIBSVM.predict(classifier.model, X)
-end
-
-function get_support_vecs(classifier::LIBSVMClassifier{LinearSVC}, y, X)
-    _, d = LIBSVM.LIBLINEAR.linear_predict(classifier.model.fit, X')
-    idx = findall(y .* d' .< 1)
-    return sort!(idx)
-end
-
-measure_model_sparsity(clf::LIBSVMClassifier{LinearSVC}) = measure_model_sparsity(clf.model.fit.w)
-measure_model_sparsity(clf::LIBSVMClassifier{SVC}) = measure_model_sparsity(clf.model.fit.coefs)
-
-LIBSVM.set_params!(classifier::LIBSVMClassifier; new_params...) = LIBSVM.set_params!(classifier.model; new_params...)
-LIBSVM.fit!(classifier, X, y) = LIBSVM.fit!(classifier.model, X, y)
-
-function LIBSVM_L2(;C::Real=1.0, tol::Real=1e-4, intercept::Bool=false, kwargs...)
-    clf = LIBSVMClassifier(LinearSVC(;
-        solver=LIBSVM.Linearsolver.L2R_L2LOSS_SVC,
-        cost=C,
-        tolerance=tol,
-        bias= intercept ? 1.0 : 0.0,
-        kwargs...
-    ))
-    return clf
-end
-
-function LIBSVM_L1(;C::Real=1.0, tol::Real=1e-4, intercept::Bool=false, kwargs...)
-    clf = LIBSVMClassifier(LinearSVC(;
-        solver=LIBSVM.Linearsolver.L1R_L2LOSS_SVC,
-        cost=C,
-        tolerance=tol,
-        bias= intercept ? 1.0 : 0.0,
-        kwargs...
-    ))
-    return clf
-end
-
-function LIBSVM_RB(;C::Real=1.0, tol::Real=1e-4, intercept::Bool=false, kwargs...)
-    clf = LIBSVMClassifier(SVC(;
-        kernel=LIBSVM.Kernel.RadialBasis,
-        cost=C,
-        tolerance=tol,
-        kwargs...
-    ))
-    return clf
-end
+include("LIBSVM_wrappers.jl")
 
 function init_ours(F, ctype, train_X, train_targets, tol, kernel, intercept, ninner, nouter, mult)
     # Create classifier and use same initial point
@@ -162,6 +89,7 @@ function run_experiment(fname, dataset, our_grid, their_grid, ctype=MultiClassif
     scale::Symbol=:zscore,
     kernel::Union{Nothing,KernelFunctions.Kernel}=nothing,
     intercept::Bool=false,
+    kwargs...
 )
     # Put options into a list
     options = (
@@ -241,237 +169,43 @@ function run_experiment(fname, dataset, our_grid, their_grid, ctype=MultiClassif
     return nothing
 end
 
-##### Example 1: synthetic #####
-if "synthetic" in ARGS
-    our_grid = [
-        range(0.0, 0.9; length=5);
-        range(0.91, 0.99; length=5);
-        range(0.991, 0.999; length=5);
-    ]
-    their_grid = [
-        range(1.0, 0.1, length=5);
-        range(0.09, 0.01, length=5);
-        range(0.009, 0.001, length=5);
-    ]
-    dataset = "synthetic"
+##### MAIN #####
+include("examples.jl")
 
-    println("Running '$(dataset)' benchmark")
-
-    # precompile
-    fname = generate_filename(4, "all")
-    run_experiment(fname, dataset, our_grid, their_grid, BinaryClassifier{Float64},
-        nfolds=10, tol=1e-1, ninner=2, nouter=2, mult=1.2,
-        intercept=true, kernel=nothing)
-    cleanup_precompile(fname)
-
-    # run
-    fname = generate_filename(4, "all")
-    run_experiment(fname, dataset, our_grid, their_grid, BinaryClassifier{Float64},
-        nfolds=10, tol=1e-4, ninner=10^4, nouter=100, mult=1.2,
-        intercept=true, kernel=nothing)
+# Check for unknown examples.
+examples = String[]
+for example in ARGS
+    if example in EXAMPLES
+        push!(examples, example)
+    else
+        @warn "Unknown example `$(example)`. Check spelling."
+    end
 end
 
-
-##### Example 2: iris #####
-if "iris" in ARGS
-    our_grid = [
-        0.0, 0.25, 0.5, 0.75 
-    ]
-    their_grid = [
-        1.0, 1e-1, 1e-2, 1e-3
-    ]
-    dataset = "iris"
-
-    println("Running '$(dataset)' benchmark")
+# Run selected examples.
+for example in examples
+    println("Running '$(example)' benchmark")
+    
+    # options
+    ctype, kwargs = OPTIONS[example]
+    our_grid = SPARSITY_GRID[example]
+    their_grid = MARGIN_GRID[example] 
 
     # precompile
+    tmpkwargs = (kwargs..., ninner=2, nouter=2,)
     fname = generate_filename(4, "all")
-    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=10, tol=1e-1, ninner=2, nouter=2, mult=1.2,
-        intercept=true, kernel=nothing)
+    for opt in (SD, MM)
+        run_experiment(fname, example, our_grid, their_grid, ctype;
+            nfolds=10, tmpkwargs...)
+    end
     cleanup_precompile(fname)
 
     # run
     fname = generate_filename(4, "all")
-    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=10, tol=1e-4, ninner=10^4, nouter=100, mult=1.2,
-        intercept=true, kernel=nothing)
-end
-
-##### Example 3: spiral #####
-if "spiral" in ARGS
-    our_grid = [
-        range(0.0, 0.9; length=5);
-        range(0.91, 0.99; length=5);
-        range(0.991, 0.999; length=5);
-    ]
-    their_grid = [
-        range(1.0, 0.1, length=5);
-        range(0.09, 0.01, length=5);
-        range(0.009, 0.001, length=5);
-    ]
-    dataset = "spiral"
-
-    println("Running '$(dataset)' benchmark")
-
-    # precompile
-    fname = generate_filename(4, "all")
-    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=10, tol=1e-1, ninner=2, nouter=2, mult=1.2,
-        intercept=true, kernel=RBFKernel())
-    cleanup_precompile(fname)
-
-    # run
-    fname = generate_filename(4, "all")
-    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=10, tol=1e-4, ninner=10^4, nouter=100, mult=1.2,
-        intercept=true, kernel=RBFKernel())
-end
-
-##### Example 4: letter-recognition #####
-if "letter-recognition" in ARGS
-    our_grid = [
-        i/16 for i in 0:15
-    ]
-    their_grid = [
-        range(1.0, 0.1, length=5);
-        range(0.09, 0.01, length=5);
-        range(0.009, 0.001, length=5);
-        1e-4
-    ]
-    dataset = "letter-recognition"
-
-    println("Running '$(dataset)' benchmark")
-
-    # precompile
-    fname = generate_filename(4, "all")
-    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=10, tol=1e-1, ninner=2, nouter=2, mult=1.2,
-        intercept=true, kernel=nothing)
-    cleanup_precompile(fname)
-
-    # run
-    fname = generate_filename(4, "all")
-    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=10, tol=1e-4, ninner=10^5, nouter=100, mult=1.2, scale=:minmax,
-        intercept=true, kernel=nothing)
-end
-
-##### Example 5: breast-cancer-wisconsin #####
-if "breast-cancer-wisconsin" in ARGS
-    our_grid = [
-        i/10 for i in 0:9
-    ]
-    their_grid = [
-        range(1.0, 0.1, length=5);
-        range(0.09, 0.01, length=5);
-    ]
-    dataset = "breast-cancer-wisconsin"
-
-    println("Running '$(dataset)' benchmark")
-
-    # precompile
-    fname = generate_filename(4, "all")
-    run_experiment(fname, dataset, our_grid, their_grid, BinaryClassifier{Float64},
-        nfolds=10, tol=1e-1, ninner=2, nouter=2, mult=1.2,
-        intercept=true, kernel=nothing)
-    cleanup_precompile(fname)
-
-    # run
-    fname = generate_filename(4, "all")
-    run_experiment(fname, dataset, our_grid, their_grid, BinaryClassifier{Float64},
-        nfolds=10, tol=1e-4, ninner=10^5, nouter=100, mult=1.2, scale=:none,
-        intercept=true, kernel=nothing)
-end
-
-##### Example 6: splice #####
-if "splice" in ARGS
-    our_grid = [
-        range(0.0, 0.9; length=5);
-        range(0.91, 0.99; length=5);
-        range(0.991, 0.999; length=5);
-    ]
-    their_grid = [
-        range(1.0, 0.1, length=5);
-        range(0.09, 0.01, length=5);
-        range(0.009, 0.001, length=5);
-    ]
-    dataset = "splice"
-
-    println("Running '$(dataset)' benchmark")
-
-    # precompile
-    fname = generate_filename(4, "all")
-    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=10, tol=1e-1, ninner=2, nouter=2, mult=1.2,
-        intercept=true, kernel=nothing)
-    cleanup_precompile(fname)
-
-    # run
-    fname = generate_filename(4, "all")
-    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=10, tol=1e-4, ninner=10^5, nouter=100, mult=1.2, scale=:minmax,
-        intercept=true, kernel=nothing)
-end
-
-##### Example 7: TCGA-PANCAN-HiSeq #####
-if "TCGA-PANCAN-HiSeq" in ARGS
-    our_grid = [
-        range(0.0, 0.9; length=5);
-        range(0.91, 0.99; length=5);
-        range(0.991, 0.999; length=5);
-    ]
-    their_grid = [
-        range(1.0, 0.1, length=5);
-        range(0.09, 0.01, length=5);
-        range(0.009, 0.001, length=5);
-    ]
-    dataset = "TCGA-PANCAN-HiSeq"
-
-    println("Running '$(dataset)' benchmark")
-
-    # precompile
-    fname = generate_filename(4, "all")
-    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=10, tol=1e-1, ninner=2, nouter=2, mult=1.2,
-        intercept=true, kernel=nothing)
-    cleanup_precompile(fname)
-
-    # run
-    fname = generate_filename(4, "all")
-    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=10, tol=1e-4, ninner=10^5, nouter=200, mult=1.05, scale=:minmax,
-        intercept=true, kernel=nothing)
-end
-
-##### Example 8: optdigits #####
-if "optdigits" in ARGS
-    our_grid = [
-        range(0.0, 0.9; length=5);
-        range(0.91, 0.99; length=5);
-        range(0.991, 0.999; length=5);
-    ]
-    their_grid = [
-        range(1.0, 0.1, length=5);
-        range(0.09, 0.01, length=5);
-        range(0.009, 0.001, length=5);
-    ]
-    dataset = "optdigits"
-
-    println("Running '$(dataset)' benchmark")
-
-    # precompile
-    fname = generate_filename(4, "all")
-    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=10, tol=1e-1, ninner=2, nouter=2, mult=1.2,
-        intercept=true, kernel=nothing)
-    cleanup_precompile(fname)
-
-    # run
-    fname = generate_filename(4, "all")
-    run_experiment(fname, dataset, our_grid, their_grid, MultiClassifier{Float64},
-        nfolds=10, tol=1e-4, ninner=10^5, nouter=100, mult=1.2, scale=:none,
-        intercept=true, kernel=nothing, proportion_train=0.68)
+    for opt in (SD, MM)
+        run_experiment(fname, example, our_grid, their_grid, ctype;
+            nfolds=10, kwargs...)
+    end
 end
 
 # function run_L2R()

@@ -72,13 +72,13 @@ function run_experiment(fname, algorithm, dataset, ctype;
         end
     end
     results = open(joinpath(dir, "$(fname).out"), "w")
-    writedlm(results, ["trial" "sparsity" "sv" "time" "iter" "obj" "dist" "train_acc" "test_acc"])
+    writedlm(results, ["trial" "sparsity" "sv" "time" "iter" "obj" "dist" "gradsq" "train_acc" "test_acc"])
 
     # helper function to write results
     function write_result(trial, result)
         # Get timing and convergence data.
         t = result.time
-        iters, obj, dist = result.value
+        iters, obj, dist, gradsq = result.value
         
         # Check support vectors.
         sv = count_support_vecs(classifier)
@@ -89,7 +89,7 @@ function run_experiment(fname, algorithm, dataset, ctype;
         sparsity = round(s*100, sigdigits=4)
 
         # Write results to file.
-        writedlm(results, Any[trial sparsity sv t iters obj dist train_acc test_acc])
+        writedlm(results, Any[trial sparsity sv t iters obj dist gradsq train_acc test_acc])
         flush(results)
         
         return nothing
@@ -110,146 +110,34 @@ function run_experiment(fname, algorithm, dataset, ctype;
     close(results)
 end
 
-##### Example 1: synthetic #####
-if "synthetic" in ARGS
-    println("Running 'synthetic' benchmark")
-    for opt in (SD, MM)
-        fname = generate_filename(1, opt)
+##### MAIN #####
+include("examples.jl")
 
-        # precompile
-        run_experiment(fname, opt, "synthetic", BinaryClassifier{Float64},
-            tol=1e-4, ninner=2, nouter=2, mult=1.2,
-            intercept=true, kernel=nothing)
-
-        # run
-        run_experiment(fname, opt, "synthetic", BinaryClassifier{Float64},
-            tol=1e-4, ninner=10^4, nouter=50, mult=1.2,
-            intercept=true, kernel=nothing)
+# Check for unknown examples.
+examples = String[]
+for example in ARGS
+    if example in EXAMPLES
+        push!(examples, example)
+    else
+        @warn "Unknown example `$(example)`. Check spelling."
     end
 end
 
-##### Example 2: iris #####
-if "iris" in ARGS
-    println("Running 'iris' benchmark")
+# Run selected examples.
+for example in examples
+    println("Running `$(example)` benchmark")
     for opt in (SD, MM)
         fname = generate_filename(1, opt)
 
-        # precompile
-        run_experiment(fname, opt, "iris", MultiClassifier{Float64},
-            tol=1e-4, ninner=2, nouter=2, mult=1.2,
-            intercept=true, kernel=nothing, strategy=OVO())
-
-        # run
-        run_experiment(fname, opt, "iris", MultiClassifier{Float64},
-            tol=1e-4, ninner=10^4, nouter=50, mult=1.2,
-            intercept=true, kernel=nothing, strategy=OVO())
-    end
-end
-
-##### Example 3: spiral #####
-if "spiral" in ARGS
-    println("Running 'spiral' benchmark")
-    for opt in (SD, MM)
-        fname = generate_filename(1, opt)
+        # options
+        ctype, kwargs = OPTIONS[example]
 
         # precompile
-        run_experiment(fname, opt, "spiral", MultiClassifier{Float64},
-            tol=1e-4, ninner=2, nouter=2, mult=1.2,
-            intercept=true, kernel=RBFKernel(), strategy=OVO())
+        tmpkwargs = (kwargs..., ninner=2, nouter=2,)
+        run_experiment(fname, opt, example, ctype; tmpkwargs...)
+        cleanup_precompile(fname)
 
         # run
-        run_experiment(fname, opt, "spiral", MultiClassifier{Float64},
-            tol=1e-4, ninner=10^4, nouter=50, mult=1.2,
-            intercept=true, kernel=RBFKernel(), strategy=OVO())
-    end
-end
-
-##### Example 4: letter-recognition #####
-if "letter-recognition" in ARGS
-    println("Running 'letter-recognition' benchmark")
-    for opt in (SD, MM)
-        fname = generate_filename(1, opt)
-
-        # precompile
-        run_experiment(fname, opt, "letter-recognition", MultiClassifier{Float64},
-            tol=1e-4, ninner=2, nouter=2, mult=1.2, scale=:minmax,
-            intercept=true, kernel=nothing, strategy=OVO())
-
-        # run
-        run_experiment(fname, opt, "letter-recognition", MultiClassifier{Float64}, 
-            tol=1e-4, ninner=10^5, nouter=50, mult=1.2, scale=:minmax,
-            intercept=true, kernel=nothing, strategy=OVO())
-    end
-end
-
-##### Example 5: breast-cancer-wisconsin #####
-if "breast-cancer-wisconsin" in ARGS
-    println("Running 'breast-cancer-wisconsin' benchmark")
-    for opt in (SD, MM)
-        fname = generate_filename(1, opt)
-
-        # precompile
-        run_experiment(fname, opt, "breast-cancer-wisconsin", BinaryClassifier{Float64},
-            tol=1e-4, ninner=2, nouter=2, mult=1.2, scale=:none,
-            intercept=true, kernel=nothing)
-
-        # run
-        run_experiment(fname, opt, "breast-cancer-wisconsin", BinaryClassifier{Float64}, 
-            tol=1e-4, ninner=10^5, nouter=50, mult=1.2, scale=:none,
-            intercept=true, kernel=nothing)
-    end
-end
-
-##### Example 6: splice #####
-if "splice" in ARGS
-    println("Running 'splice' benchmark")
-    for opt in (SD, MM)
-        fname = generate_filename(1, opt)
-
-        # precompile
-        run_experiment(fname, opt, "splice", MultiClassifier{Float64},
-            tol=1e-4, ninner=2, nouter=2, mult=1.1, scale=:minmax,
-            intercept=true, kernel=nothing, strategy=OVO())
-
-        # run
-        run_experiment(fname, opt, "splice", MultiClassifier{Float64}, 
-            tol=1e-4, ninner=10^5, nouter=100, mult=1.1, scale=:minmax,
-            intercept=true, kernel=nothing, strategy=OVO())
-    end
-end
-
-##### Example 7: TCGA-PANCAN-HiSeq #####
-if "TCGA-PANCAN-HiSeq" in ARGS
-    println("Running 'TCGA-PANCAN-HiSeq' benchmark")
-    for opt in (SD, MM)
-        fname = generate_filename(1, opt)
-
-        # precompile
-        run_experiment(fname, opt, "TCGA-PANCAN-HiSeq", MultiClassifier{Float64},
-            tol=1e-4, ninner=2, nouter=2, mult=1.05, scale=:minmax,
-            intercept=true, kernel=nothing, strategy=OVO())
-
-        # run
-        run_experiment(fname, opt, "TCGA-PANCAN-HiSeq", MultiClassifier{Float64}, 
-            tol=1e-4, ninner=10^5, nouter=200, mult=1.05, scale=:minmax,
-            intercept=true, kernel=nothing, strategy=OVO())
-    end
-end
-
-##### Example 8: optdigits #####
-if "optdigits" in ARGS
-    println("Running 'optdigits' benchmark")
-    for opt in (SD, MM)
-        fname = generate_filename(1, opt)
-
-        # precompile
-        run_experiment(fname, opt, "optdigits", MultiClassifier{Float64},
-            tol=1e-4, ninner=2, nouter=2, mult=1.2, scale=:none,
-            intercept=true, kernel=nothing, strategy=OVO(), percent_train=0.68)
-
-        # run
-        run_experiment(fname, opt, "optdigits", MultiClassifier{Float64}, 
-            tol=1e-4, ninner=10^5, nouter=50, mult=1.2, scale=:none,
-            intercept=true, kernel=nothing, strategy=OVO(), percent_train=0.68)
+        run_experiment(fname, opt, example, ctype; kwargs...)
     end
 end

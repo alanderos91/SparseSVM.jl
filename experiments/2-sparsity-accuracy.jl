@@ -85,7 +85,7 @@ function run_experiment(fname, algorithm::AlgOption, y, X, beta0, grid;
     function write_result(classifier, s, result)
         # Get timing and convergence data.
         t = result.time + init_cost.time
-        iters, obj, dist = result.value
+        iters, obj, dist, gradsq = result.value
 
         # Check support vectors.
         sv = count_support_vecs(classifier)
@@ -105,7 +105,7 @@ function run_experiment(fname, algorithm::AlgOption, y, X, beta0, grid;
 
         # Write results to file.
         writedlm(results, Any[
-            m n k0 sparsity sv t iters obj dist MSE TP FP TN FN train_acc test_acc 
+            m n k0 sparsity sv t iters obj dist gradsq MSE TP FP TN FN train_acc test_acc 
         ])
         flush(results)
     end
@@ -200,7 +200,7 @@ for (opt, fname) in zip(algorithms, fnames)
 
     # results file
     open(joinpath("results", "experiment2", "$(fname).out"), "a+") do results
-        writedlm(results, ["m" "n" "k0" "sparsity" "sv" "time" "iter" "obj" "dist" "MSE" "TP" "FP" "TN" "FN" "train_acc" "test_acc"])
+        writedlm(results, ["m" "n" "k0" "sparsity" "sv" "time" "iter" "obj" "dist" "gradsq" "MSE" "TP" "FP" "TN" "FN" "train_acc" "test_acc"])
     end
     
     # log file
