@@ -391,7 +391,7 @@ function get_support_vecs(classifier::BinaryClassifier)
     if classifier.data.kernelf isa Nothing
         # linear case: check violations
         Ab = map(x -> prediction(classifier, x), eachrow(classifier.data.X))
-        idx = findall(classifier.data.y .* Ab .< 1)
+        idx = findall(classifier.data.y .* Ab .<= 1)
     else
         # non-linear case: check for non-zero weights
         intercept = classifier.intercept

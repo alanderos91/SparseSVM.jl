@@ -486,7 +486,7 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
     Ab = buffer[1]
     d2 = buffer[2]
     @inbounds for i in eachindex(s)
-        d2[i] = (s[i] / m) / (s[i]^2 / m + rho)
+        d2[i] = (s[i] / m) / (s[i]^2 / m + rho/(n-k+1))
     end
     btmp = buffer[3]
     D1 = Diagonal(s)
@@ -494,10 +494,10 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
     
     # Initialize projection.
     compute_projection! = ComputeProjection(b, p, pvec, idx, k)
-    
+
     # Initialize objective, distance, and gradient.
     evaluate_objective! = EvaluateObjective(A, y, z, b, p, rho, k, grad, Ab)
-    
+
     # initialize worker array for Nesterov acceleration
     copyto!(b_old, b)
     apply_nesterov! = ApplyNesterov(b, b_old)
@@ -525,7 +525,7 @@ function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T
             old = obj
         end  
     end
-    verbose && print(iters,"  ",obj,"  ",dist)
+    verbose && print(iters,"  ",obj,"  ",dist, "  ",gradsq)
     return b, iters, obj, dist, gradsq
 end
 
@@ -537,6 +537,7 @@ function compute_z!(z, Ab, y)
 end
 
 @inbounds function update_beta!(b, btmp, U, V, D1, D2, z, p)
+    T = eltype(b)
     r = size(D1, 1)
     U_block = view(U, :, 1:r)
     V_block = view(V, :, 1:r)
@@ -546,13 +547,13 @@ end
     lmul!(D1, btmp)
 
     # btmp = U' z - btmp
-    mul!(btmp, U_block', z, true, -1.0)
+    mul!(btmp, U_block', z, one(T), -one(T))
 
     # btmp = [ (1/m Σ² + ρI)⁻¹ 1/m Σ ] btmp
     lmul!(D2, btmp)
 
     # b = p = p + V'b
-    mul!(p, V_block, btmp, true, true)
+    mul!(p, V_block, btmp, one(T), one(T))
     copyto!(b, p)
 end
 
