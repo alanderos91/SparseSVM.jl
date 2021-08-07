@@ -44,7 +44,7 @@ const OPTIONS = Dict(
     "letter-recognition" => (
         MultiClassifier{Float64},
         (tol=1e-6,
-        ninner=10^5,
+        ninner=10^4,
         nouter=100,
         mult=1.1,
         intercept=true,
@@ -72,7 +72,7 @@ const OPTIONS = Dict(
     "splice" => (
         MultiClassifier{Float64},
         (tol=1e-6,
-        ninner=10^5,
+        ninner=10^4,
         nouter=100,
         mult=1.1,
         intercept=true,
@@ -86,7 +86,7 @@ const OPTIONS = Dict(
     "TCGA-PANCAN-HiSeq" => (
         MultiClassifier{Float64},
         (tol=1e-6,
-        ninner=10^5,
+        ninner=10^4,
         nouter=100,
         mult=1.1,
         intercept=true,
@@ -100,7 +100,7 @@ const OPTIONS = Dict(
     "optdigits" => (
         MultiClassifier{Float64},
         (tol=1e-6,
-        ninner=10^5,
+        ninner=10^4,
         nouter=100,
         mult=1.1,
         intercept=true,
