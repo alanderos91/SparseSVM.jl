@@ -339,6 +339,9 @@ function annealing!(f, b, A, y, tol, k, intercept;
     compute_projection! = ComputeProjection(b, p, pvec, idx, k)
     evaluate_objective! = EvaluateObjective(A, y, z, b, p, rho, k, grad, Ab)
 
+    compute_projection!(true)
+    _, old, _ = evaluate_objective!(true)
+
     verbose && println()
     for n in 1:nouter
         # solve problem for fixed rho
@@ -353,10 +356,10 @@ function annealing!(f, b, A, y, tol, k, intercept;
         
         iters += cur_iters
 
-        if dist < 2*1e-6
+        if dist < 2e-6 || abs(dist - old) < tol * (1 + old)
           break
         else
-          old = dist
+          old = gradsq
         end
                 
         # update according to annealing schedule
@@ -364,6 +367,7 @@ function annealing!(f, b, A, y, tol, k, intercept;
     end
     
     # Project b
+    evaluate_objective! = EvaluateObjective(A, y, z, b, p, rho, k, grad, Ab)
     compute_projection!(true)
     obj, dist, gradsq = evaluate_objective!(true)
     copyto!(b, p)
