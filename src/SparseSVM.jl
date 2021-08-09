@@ -356,10 +356,10 @@ function annealing!(f, b, A, y, tol, k, intercept;
         
         iters += cur_iters
 
-        if dist < 2e-6 || abs(dist - old) < tol * (1 + old)
-          break
+        if 2*dist < 1e-6 || 2*abs(dist - old) < 1e-6 * (1 + old)
+            break
         else
-          old = gradsq
+          old = dist
         end
                 
         # update according to annealing schedule
