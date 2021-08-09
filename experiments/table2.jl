@@ -31,7 +31,8 @@ function aggregate_metrics(df)
 end
 
 function subset_max_accuracy(df)
-    result = df[argmax(df.val_acc), :]
+    F = [(r.val_acc, r.sparsity) for r in eachrow(df)]
+    result = df[argmax(F), :]
     result.time = sum(df.time)
     result.iter = sum(df.iter)
     return DataFrame(result)
@@ -57,7 +58,7 @@ function table2(idir, datasets)
         )
 
         df = CSV.read(file, DataFrame, comment="alg", header=[
-            "alg", "fold", "sparsity", "time", "sv", "iter", "obj", "dist", "train_acc", "val_acc", "test_acc"]
+            "alg", "fold", "sparsity", "time", "sv", "iter", "obj", "dist", "gradsq", "train_acc", "val_acc", "test_acc"]
             )
         MM_df = aggregate_metrics(filter(:alg => x -> x == "MM", df))
         SD_df = aggregate_metrics(filter(:alg => x -> x == "SD", df))
@@ -107,16 +108,20 @@ function table2(idir, datasets)
         head=header, fmt=fmt, adjustment=:r)
 end
 
-# Get script arguments.
-idir = ARGS[1]
-odir = ARGS[2]
-datasets = [
-    "breast-cancer-wisconsin", "iris", "letter-recognition", "optdigits",
-    "spiral", "splice", "synthetic", "TCGA-PANCAN-HiSeq"
-]
+function main()
+    # Get script arguments.
+    idir = ARGS[1]
+    odir = ARGS[2]
+    datasets = [
+        "breast-cancer-wisconsin", "iris", "letter-recognition", "optdigits",
+        "spiral", "splice", "synthetic", "TCGA-PANCAN-HiSeq"
+    ]
 
-tab2 = table2(idir, datasets)
+    tab2 = table2(idir, datasets)
 
-open(joinpath(odir, "Table2.tex"), "w") do io
-    write(io, tab2)
+    open(joinpath(odir, "Table2.tex"), "w") do io
+        write(io, tab2)
+    end
 end
+
+main()

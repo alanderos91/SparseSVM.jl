@@ -161,7 +161,7 @@ const MARGIN_GRID = Dict(
         range(1.0, 0.1, length=5);
         range(0.09, 0.01, length=5);
         range(0.009, 0.001, length=5);
-        1e-45],
+        1e-4],
     "breast-cancer-wisconsin" => [
         range(1.0, 0.1, length=5);
         range(0.09, 0.01, length=5);

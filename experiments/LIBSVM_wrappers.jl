@@ -29,12 +29,6 @@ function (classifier::LIBSVMClassifier)(X::AbstractMatrix)
     LIBSVM.predict(classifier.model, X)
 end
 
-function get_support_vecs(classifier::LIBSVMClassifier{LinearSVC}, y, X)
-    _, d = LIBSVM.LIBLINEAR.linear_predict(classifier.model.fit, X')
-    idx = findall(y .* d' .< 1)
-    return sort!(idx)
-end
-
 measure_model_sparsity(clf::LIBSVMClassifier{LinearSVC}) = measure_model_sparsity(clf.model.fit.w)
 measure_model_sparsity(clf::LIBSVMClassifier{SVC}) = measure_model_sparsity(clf.model.fit.coefs)
 
@@ -45,8 +39,8 @@ function LIBSVM_L2(;C::Real=1.0, tol::Real=1e-4, intercept::Bool=false, kwargs..
     clf = LIBSVMClassifier(LinearSVC(;
         solver=LIBSVM.Linearsolver.L2R_L2LOSS_SVC,
         cost=C,
-        tolerance=tol,
-        bias= intercept ? 1.0 : 0.0,
+        # tolerance=tol,
+        # bias= intercept ? 1.0 : 0.0,
         kwargs...
     ))
     return clf
@@ -56,8 +50,8 @@ function LIBSVM_L1(;C::Real=1.0, tol::Real=1e-4, intercept::Bool=false, kwargs..
     clf = LIBSVMClassifier(LinearSVC(;
         solver=LIBSVM.Linearsolver.L1R_L2LOSS_SVC,
         cost=C,
-        tolerance=tol,
-        bias= intercept ? 1.0 : 0.0,
+        # tolerance=tol,
+        # bias= intercept ? 1.0 : 0.0,
         kwargs...
     ))
     return clf
@@ -67,7 +61,7 @@ function LIBSVM_RB(;C::Real=1.0, tol::Real=1e-4, intercept::Bool=false, kwargs..
     clf = LIBSVMClassifier(SVC(;
         kernel=LIBSVM.Kernel.RadialBasis,
         cost=C,
-        tolerance=tol,
+        # tolerance=tol,
         kwargs...
     ))
     return clf

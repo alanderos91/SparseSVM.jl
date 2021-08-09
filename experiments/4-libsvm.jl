@@ -194,18 +194,12 @@ for example in examples
     # precompile
     tmpkwargs = (kwargs..., ninner=2, nouter=2,)
     fname = generate_filename(4, "all")
-    for opt in (SD, MM)
-        run_experiment(fname, example, our_grid, their_grid, ctype;
-            nfolds=10, tmpkwargs...)
-    end
+    run_experiment(fname, example, our_grid, their_grid, ctype; nfolds=10, tmpkwargs...)
     cleanup_precompile(example, fname)
 
     # run
     fname = generate_filename(4, "all")
-    for opt in (SD, MM)
-        run_experiment(fname, example, our_grid, their_grid, ctype;
-            nfolds=10, kwargs...)
-    end
+    run_experiment(fname, example, our_grid, their_grid, ctype; nfolds=10, kwargs...)
 end
 
 # function run_L2R()

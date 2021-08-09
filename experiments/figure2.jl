@@ -26,10 +26,12 @@ function add_column!(df, alg)
     insertcols!(df, 1, :algorithm => alg)
 end
 
-function subset_max_accuracy(df, col)
-    idx = [argmax(gdf.test_acc) for gdf in groupby(df, col)]
+function subset_true_sparsity(df, col, k0)
+    gdfs = groupby(df, col)
+    f(n) = round(100 * (1 - k0 / n), sigdigits=4)
+    idx = [findfirst(s -> isapprox(f(gdf.n[1]), s), gdf.sparsity) for gdf in gdfs]
     DataFrame(
-        gdf[idx[i],:] for (i,gdf) in enumerate(groupby(df, col))
+        gdf[idx[i],:] for (i,gdf) in enumerate(gdfs)
     )
 end
 
@@ -37,14 +39,18 @@ end
 function FDR(TP, FP, TN, FN, p)
     TPR = TP / (TP + FN) # sensitivity
     FPR = FP / (TN + FP) # 1 - specificity
-    return 100 * FPR * (1-p) / ( TPR * p + FPR * (1-p) )
+    v = 100 * FPR * (1-p) / ( TPR * p + FPR * (1-p) )
+    v = isnan(v) ? zero(v) : isinf(v) ? 100 : v
+    return v
 end
 
 # FOR; adjusted for prevalence p
 function FOR(TP, FP, TN, FN, p)
     TNR = TN / (TN + FP) # specificity
     FNR = FN / (TP + FN) # 1 - sensitivity
-    return 100 * FNR * p / ( FNR * p + TNR * (1-p) )
+    v = 100 * FNR * p / ( FNR * p + TNR * (1-p) )
+    v = isnan(v) ? zero(v) : isinf(v) ? 100 : v
+    return v
 end
 
 function figure2a(MM_df, SD_df)
@@ -124,7 +130,7 @@ function figure2a(MM_df, SD_df)
         sp = 1 + 2*ncols + col_shift
         @df df plot!(fig, xs, FOR.(:TP, :FP, :TN, :FN, prevalence);
             group=:algorithm,
-            xlabel="sparsity (%)",
+            # xlabel="sparsity (%)",
             ylabel=get_ylabel(idx, "FOR (%)"),
             ylims=(0, 10),
             legend=:topright,
@@ -145,13 +151,13 @@ function figure2b(MM_df, SD_df)
     df = [
         # underdetermined
         vcat(
-            subset_max_accuracy(filter(:m => x -> x == 500, MM_df), :n),
-            subset_max_accuracy(filter(:m => x -> x == 500, SD_df), :n),
+            subset_true_sparsity(filter(:m => x -> x == 500, MM_df), :n, k0),
+            subset_true_sparsity(filter(:m => x -> x == 500, SD_df), :n, k0),
         ),
         # overdetermined
         vcat(
-            subset_max_accuracy(filter(:n => x -> x == 500, MM_df), :m),
-            subset_max_accuracy(filter(:n => x -> x == 500, SD_df), :m),
+            subset_true_sparsity(filter(:n => x -> x == 500, MM_df), :m, k0),
+            subset_true_sparsity(filter(:n => x -> x == 500, SD_df), :m, k0),
         )
     ]
 

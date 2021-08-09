@@ -97,7 +97,7 @@ function table3(idir, datasets)
 
     # Create header and formatting function.
     header = [
-        "Dataset", "Alg.", latexstring(L"s", " (\\%) / ", L"C"),
+        "Dataset", "Alg.", latexstring(L"s", " (\\%)", " or ", L"C"),
         "Total Time (s)", "Tr (\\%)", "V (\\%)", "T (\\%)", "Sparsity"
     ]
 
@@ -113,16 +113,18 @@ function table3(idir, datasets)
         head=header, fmt=fmt, adjustment=:r)
 end
 
-# Get script arguments.
-idir = ARGS[1]
-odir = ARGS[2]
-datasets = [
-    "breast-cancer-wisconsin", "iris", "letter-recognition", "optdigits",
-    "spiral", "splice", "synthetic", "TCGA-PANCAN-HiSeq"
-]
+function main()
+    # Get script arguments.
+    idir = ARGS[1]
+    odir = ARGS[2]
+    datasets = [
+        "breast-cancer-wisconsin", "iris", "letter-recognition", "optdigits",
+        "spiral", "splice", "synthetic", "TCGA-PANCAN-HiSeq"
+    ]
 
-tab3 = table3(idir, datasets)
+    tab3 = table3(idir, datasets)
 
-open(joinpath(odir, "Table3.tex"), "w") do io
-    write(io, tab3)
+    open(joinpath(odir, "Table3.tex"), "w") do io
+        write(io, tab3)
+    end
 end
