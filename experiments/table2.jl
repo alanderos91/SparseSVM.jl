@@ -21,9 +21,9 @@ function aggregate_metrics(df)
         [:alg, :iter, :time, :obj, :train_acc, :val_acc, :test_acc] =>
         ( (alg,a,b,c,d,e,f) -> (
             alg=first(alg),
-            iter=median(a),
-            time=median(b),
-            obj=median(c),
+            iter=mean(a),
+            time=mean(b),
+            obj=mean(c),
             val_acc=mean(e),
             test_acc=mean(f),
         )) =>

@@ -11,7 +11,7 @@ default(:fontfamily, "Computer Modern")
 default(:dpi, 600)
 default(:legendfontsize, 8)
 
-const SELECTED_COLS = [:iter, :time, :obj, :gradsq, :dist, :sv, :train_acc, :test_acc]
+const SELECTED_COLS = [:iter, :obj, :gradsq, :dist, :sv, :test_acc]
 
 function is_valid_file(file)
     file = basename(file)
@@ -37,22 +37,22 @@ get_randomized_subset(df) = filter(:trial => x -> x > 0, df)
 function figure1(df)
     subplot_label = Dict(
     :iter => "# iterations",
-    :time => "time (s)",
+    # :time => "time (s)",
     :sv => "# support vectors",
     :obj => "penalized objective",
     :dist => "squared distance",
     :gradsq => "squared norm gradient",
-    :train_acc => "train accuracy (%)",
+    # :train_acc => "train accuracy (%)",
     :test_acc => "test accuracy (%)",
     )
     w, h = default(:size)
 
-    yscale = [:log10, :log10, :log10, :log10, :log10, :log10, :identity, :identity]
-    legend = [:topleft, nothing, nothing, nothing, nothing, nothing, nothing, nothing]
-    ylimits = [:auto, :auto, :auto, :auto, :auto, :auto, (0, 105), (0, 105)]
+    yscale = [:log10, :log10, :log10, :log10, :log10, :identity]
+    legend = [:topleft, nothing, nothing, nothing, nothing, nothing]
+    ylimits = [:auto, :auto, :auto, :auto, :auto, (0, 105)]
 
     # Initialize the plot
-    fig = plot(layout=grid(2,4), legend=false, grid=false, size=(4*w, 2*h))
+    fig = plot(layout=grid(2,3), legend=false, grid=false, size=(4*w, 2*h))
     for (i, metric) in enumerate(SELECTED_COLS)
         # Add boxplots for each metric.
         @df df groupedboxplot!(fig, string.(:dataset), cols(metric),

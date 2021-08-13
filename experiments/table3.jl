@@ -17,7 +17,7 @@ function aggregate_metrics(df)
         [:alg, :time, :train_acc, :val_acc, :test_acc, :sparsity] =>
         ( (alg,a,b,c,d,e) -> (
             alg=first(alg),
-            time=median(a),
+            time=mean(a),
             train_acc=mean(b),
             val_acc=mean(c),
             test_acc=mean(d),
@@ -128,3 +128,5 @@ function main()
         write(io, tab3)
     end
 end
+
+main()

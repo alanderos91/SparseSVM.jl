@@ -130,7 +130,7 @@ function figure2a(MM_df, SD_df)
         sp = 1 + 2*ncols + col_shift
         @df df plot!(fig, xs, FOR.(:TP, :FP, :TN, :FN, prevalence);
             group=:algorithm,
-            # xlabel="sparsity (%)",
+            xlabel="sparsity (%)",
             ylabel=get_ylabel(idx, "FOR (%)"),
             ylims=(0, 10),
             legend=:topright,
@@ -184,6 +184,7 @@ function figure2b(MM_df, SD_df)
     
     xlabel = ["# features (p)", "# samples (n)"]
     get_ylabel(idx, text) = idx == 1 ? text : ""
+    legpos = [:topleft, :topright, :topleft, :topleft, :topleft, :topleft, :topleft, :topleft]
 
     for idx in eachindex(df)
         data = df[idx]
@@ -201,19 +202,19 @@ function figure2b(MM_df, SD_df)
 
         ##### Row 1: Iterations #####
         sp = 1 + col_shift
-        @df data plot!(fig, dimension_vals, :iter; group=:algorithm, subplot=sp, title=title, ylabel=get_ylabel(idx, "iterations"), options...)
+        @df data plot!(fig, dimension_vals, :iter; group=:algorithm, subplot=sp, title=title, ylabel=get_ylabel(idx, "iterations"), legend=legpos[sp], options...)
 
         ##### Row 2: Time #####
         sp = 1 + ncols + col_shift
-        @df data plot!(fig, dimension_vals, :time; group=:algorithm, subplot=sp, ylabel=get_ylabel(idx, "time (s)"), yscale=:log10, options...)
+        @df data plot!(fig, dimension_vals, :time; group=:algorithm, subplot=sp, ylabel=get_ylabel(idx, "time (s)"), legend=legpos[sp], options...)
 
         ##### Row 3: FDR #####
         sp = 1 + 2*ncols + col_shift
-        @df data plot!(fig, dimension_vals, FDR.(:TP, :FP, :TN, :FN, prevalence); group=:algorithm, subplot=sp, ylabel=get_ylabel(idx, "FDR (%)"), ylims=(0, 105), options...)
+        @df data plot!(fig, dimension_vals, FDR.(:TP, :FP, :TN, :FN, prevalence); group=:algorithm, subplot=sp, ylabel=get_ylabel(idx, "FDR (%)"), ylims=(0, 105), legend=legpos[sp], options...)
 
         ##### Row 4: FOR #####
         sp = 1 + 3*ncols + col_shift
-        @df data plot!(fig, dimension_vals, FOR.(:TP, :FP, :TN, :FN, prevalence); group=:algorithm, subplot=sp, ylabel=get_ylabel(idx, "FOR (%)"), ylims=(0, 10), xlabel=xlabel[idx], options...)
+        @df data plot!(fig, dimension_vals, FOR.(:TP, :FP, :TN, :FN, prevalence); group=:algorithm, subplot=sp, ylabel=get_ylabel(idx, "FOR (%)"), ylims=(0, 10), xlabel=xlabel[idx], legend=legpos[sp], options...)
     end
 
     return fig
@@ -250,3 +251,5 @@ function main()
     fig2B = figure2b(MM_df, SD_df)
     savefig(fig2B, joinpath(odir, "Fig2B.png"))
 end
+
+main()

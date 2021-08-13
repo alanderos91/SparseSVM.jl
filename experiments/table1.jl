@@ -22,14 +22,14 @@ function aggregate_metrics(df)
         [:alg; METRICS] =>
         ( (alg,a,b,c,d,e,f,g,h) -> (
             alg=first(alg),
-            iter=median(a),
-            time=median(b),
-            obj=median(c),
-            dist=median(d),
-            train_acc=median(e),
-            val_acc=median(f),
-            test_acc=median(g),
-            sv=median(h),
+            iter=mean(a),
+            time=mean(b),
+            obj=mean(c),
+            dist=mean(d),
+            train_acc=mean(e),
+            val_acc=mean(f),
+            test_acc=mean(g),
+            sv=mean(h),
         )) =>
     AsTable)
 end
@@ -107,3 +107,5 @@ function main()
         write(io, table1)
     end
 end
+
+main()
