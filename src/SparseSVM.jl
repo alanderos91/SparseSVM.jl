@@ -167,68 +167,6 @@ end
 
 ##### END OBJECTIVE #####
 
-##### PROJECTIONS ######
-"""
-Project `x` onto sparsity set with `k` non-zero elements.
-Assumes `idx` enters as a vector of indices into `x`.
-"""
-function project_sparsity_set!(x, idx, k)
-    # do nothing if k > length(x)
-    if k ≥ length(x) return x end
-    
-    # fill with zeros if k ≤ 0
-    if k ≤ 0 return fill!(x, 0) end
-    
-    # find the spliting element
-    pivot = search_partialsort!(idx, x, k)
-    
-    # apply the projection
-    kcount = 0
-    @inbounds for i in eachindex(x)
-        if abs(x[i]) <= abs(pivot) || kcount ≥ k
-            x[i] = 0
-        else
-            kcount += 1
-        end
-    end
-    
-    return x
-end
-
-"""
-Search `x` for the pivot that splits the vector into the `k`-largest elements in magnitude.
-
-The search preserves signs and returns `x[k]` after partially sorting `x`.
-"""
-function search_partialsort!(idx, x, k)
-    #
-    # Based on https://github.com/JuliaLang/julia/blob/788b2c77c10c2160f4794a4d4b6b81a95a90940c/base/sort.jl#L863
-    # This eliminates a mysterious allocation of ~48 bytes per call for
-    #   sortperm!(idx, x, alg=algorithm, lt=isless, by=abs, rev=true, initialized=false)
-    # where algorithm = PartialQuickSort(lo:hi)
-    # Savings are small in terms of performance but add up for CV code.
-    #
-    lo = k
-    hi = k+1
-    
-    # Order arguments
-    lt  = isless
-    by  = abs
-    rev = true
-    o = Base.Order.Forward
-    order = Base.Order.Perm(Base.Sort.ord(lt, by, rev, o), x)
-    
-    # Initialize the idx array; algorithm relies on idx[i] = i
-    @inbounds for i in eachindex(idx)
-        idx[i] = i
-    end
-    
-    # sort!(idx, lo, hi, PartialQuickSort(k), order)
-    Base.Sort.Float.fpsort!(idx, PartialQuickSort(lo:hi), order)
-    
-    return x[idx[k+1]]
-end
-
 """
 Returns a tuple `(pvec, idx)` where `pvec` is a slice into `p` when `intercept == true`
 or `p` otherwise. The vector `idx` is a collection of indices into `pvec`.
@@ -243,24 +181,9 @@ function get_model_coefficients(p, intercept)
     return (pvec, idx)
 end
 
-struct ComputeProjection{T1,T2,T3}
-    b::T1
-    p::T2
-    pvec::T3
-    idx::Vector{Int}
-    k::Int
-end
-
-function (F::ComputeProjection)(need_copy)
-    b, p, pvec, idx, k = F.b, F.p, F.pvec, F.idx, F.k
-    if need_copy copyto!(p, b) end
-    project_sparsity_set!(pvec, idx, k)
-    return p
-end
-
-##### END PROJECTIONS #####
-
 ##### MAIN DRIVER #####
+include("projections.jl")
+
 function _init_weights_!(b, X, y, intercept)
     m, n = size(X)
     idx = ifelse(intercept, 1:n-1, 1:n)
@@ -336,7 +259,13 @@ function annealing!(f, b, A, y, tol, k, intercept;
     # initialize projection and check initial distance
     p, z, grad, Ab = extras.p, extras.z, extras.grad, extras.buffer[1]
     pvec, idx = get_model_coefficients(p, intercept)
-    compute_projection! = ComputeProjection(b, p, pvec, idx, k)
+    idx_buffer = similar(idx)
+    compute_projection! = function (need_copy)
+        if need_copy
+            copyto!(p, b)
+        end
+        project_sparsity_set!(pvec, idx, k, idx_buffer)
+    end
     evaluate_objective! = EvaluateObjective(A, y, z, b, p, rho, k, grad, Ab)
 
     compute_projection!(true)

@@ -157,6 +157,7 @@ end
   n = 100
   x = zeros(n)
   idx = collect(1:n)
+  idx_buffer = similar(idx)
 
   # case: more nonzeros than k
   k = 10
@@ -165,7 +166,7 @@ end
   end
   shuffle!(x)
   perm = sortperm(x, rev=true, by=abs)
-  xproj = project_sparsity_set!(copy(x), idx, k)
+  xproj = project_sparsity_set!(copy(x), idx, k, idx_buffer)
   @test all(i -> xproj[perm[i]] == x[perm[i]], 1:k)
   @test all(i -> xproj[perm[i]] == 0, k+1:n)
 
@@ -177,7 +178,7 @@ end
   end
   shuffle!(x)
   perm = sortperm(x, rev=true, by=abs)
-  xproj = project_sparsity_set!(copy(x), idx, k)
+  xproj = project_sparsity_set!(copy(x), idx, k, idx_buffer)
   @test all(i -> xproj[i] == x[i], 1:n)
 
   # case: exactly k nonzeros
@@ -187,7 +188,7 @@ end
   end
   shuffle!(x)
   perm = sortperm(x, rev=true, by=abs)
-  xproj = project_sparsity_set!(copy(x), idx, k)
+  xproj = project_sparsity_set!(copy(x), idx, k, idx_buffer)
   @test all(i -> xproj[i] == x[i], 1:n)
 
   # helper function should give length n vector without intercept
