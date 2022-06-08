@@ -3,6 +3,10 @@ using DataFrames: copy, copyto!
 using DataDeps, CSV, DataFrames, CodecZlib
 using MLDataUtils
 using KernelFunctions, LinearAlgebra, Random, Statistics
+using Polyester, Parameters
+
+import Base: show
+import MLDataUtils: poslabel, neglabel, classify
 
 ##### DATA #####
 
@@ -552,11 +556,10 @@ export sparse_direct, sparse_direct!, sparse_steepest, sparse_steepest!
 ##### END MM ALGORITHMS #####
 
 ##### CLASSIFICATION #####
-include("classifier.jl")
+include("problem.jl")
 
 export MultiClassStrategy, OVO, OVR
-export SVMBatch, BinaryClassifier, MultiClassifier, trainMM, trainMM!
-export get_support_vecs, count_support_vecs
+export BinarySVMProblem, MultiSVMProblem
 ##### END CLASSIFICATION #####
 
 end # end module
