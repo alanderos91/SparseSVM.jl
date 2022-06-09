@@ -448,7 +448,7 @@ end
 cast_votes!(problem, x) = __cast_votes__!(problem.strategy, problem.svm, problem.encoding, problem.vote, x)
 
 function __cast_votes__!(::OVO, svms, encoding, vote, x)
-    fill!(problem.vote, 0)
+    fill!(vote, 0)
     for svm in svms
         predicted_label = classify(svm, x)
         j = label2ind(predicted_label, encoding)
@@ -457,7 +457,7 @@ function __cast_votes__!(::OVO, svms, encoding, vote, x)
 end
 
 function __cast_votes__!(::OVR, svms, encoding, vote, x)
-    fill!(problem.vote, 0)
+    fill!(vote, 0)
     for svm in svms
         predicted_label = classify(svm, x)
         positive_label = poslabel(svm)
