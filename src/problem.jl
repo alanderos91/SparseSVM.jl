@@ -53,7 +53,7 @@ struct BinarySVMProblem{T,S,YT,XT,KT,LT,encT,kernT,coeffT,resT,gradT} <: Abstrac
             kernel::kernT, coeff::coeffT, coeff_prev::coeffT,
             proj::coeffT, res::resT, grad::gradT
         ) where {T,S,YT,XT,KT,encT,kernT,coeffT,resT,gradT}
-        for arrayT in (YT, coeffT, resT, gradT)
+        for arrayT in (YT, coeffT, gradT) # need a way to check nested arrays? like res
             if eltype(arrayT) != T
                 error("Inconsistent element types $(eltype(arrayT)) and $(T).")
             end
@@ -114,13 +114,14 @@ function BinarySVMProblem(labels, data, positive_label::S, coeff, coeff_prev, pr
         ovr_encoding = LabelEnc.OneVsRest(positive_label, negative_label)
     end
     margin_encoding = LabelEnc.MarginBased(T)
-    y = convertlabel(margin_encoding, labels, ovr_encoding)
+    y = similar(data, n)
+    y .= convertlabel.(margin_encoding, labels, ovr_encoding)
 
     # Create design matrices.
     X, K = create_X_and_K(kernel, data, intercept)
 
     # Allocate additional data structures used to fit a model.
-    res = similar(data, n)
+    res = (; main=similar(data, n), dist=similar(coeff))
     grad = similar(coeff)
 
     return BinarySVMProblem{T}(n, p,
@@ -209,8 +210,8 @@ predict(problem::BinarySVMProblem, x) = __predict__(problem.kernel, problem, x)
 
 function __predict__(::Nothing, problem::BinarySVMProblem, x::AbstractVector)
     @unpack p, proj, intercept = problem
-    β = view(proj.all, 1:p)
-    β0 = proj.all[p+intercept]
+    β = view(proj, 1:p)
+    β0 = proj[p+intercept]
     yhat = dot(view(x, 1:p), β)
     intercept && (yhat += β0)
     return yhat
@@ -218,8 +219,8 @@ end
 
 function __predict__(::Nothing, problem::BinarySVMProblem, X::AbstractMatrix)
     @unpack p, proj, intercept = problem
-    β = view(proj.all, 1:p)
-    β0 = proj.all[p+intercept]
+    β = view(proj, 1:p)
+    β0 = proj[p+intercept]
     yhat = view(X, :, 1:p) * β
     intercept && (yhat += β0)
     return yhat
@@ -270,7 +271,7 @@ function __classify__(problem::BinarySVMProblem, y::Number)
 end
 
 function __classify__(problem::BinarySVMProblem, y::AbstractVector)
-    n = size(Y, 1)
+    n = length(y)
     label = Vector{labeltype(problem)}(undef, n)
     nthreads = BLAS.get_num_threads()
     BLAS.set_num_threads(1)

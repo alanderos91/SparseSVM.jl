@@ -2,7 +2,7 @@
 Project `x` onto sparsity set with `k` non-zero elements.
 Assumes `idx` enters as a vector of indices into `x`.
 """
-function project_sparsity_set!(x, idx, k, buffer)
+function project_l0_ball!(x, idx, k, buffer)
     n = length(x)
     # do nothing if k > length(x)
     if k ≥ n return x end
@@ -73,4 +73,17 @@ function l0_search_partialsort!(idx, x, k, rev::Bool)
     Base.Sort.Float.fpsort!(idx, PartialQuickSort(lo:hi), order)
 
     return x[idx[k]]
+end
+
+struct L0Projection <: Function
+    idx::Vector{Int}
+    buffer::Vector{Int}
+
+    function L0Projection(n::Int)
+        new(collect(1:n), Vector{Int}(undef, n))
+    end
+end
+
+function (P::L0Projection)(x, k)
+    project_l0_ball!(x, P.idx, k, P.buffer)
 end

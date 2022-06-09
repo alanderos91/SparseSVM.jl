@@ -2,8 +2,9 @@ module SparseSVM
 using DataFrames: copy, copyto!
 using DataDeps, CSV, DataFrames, CodecZlib
 using MLDataUtils
-using KernelFunctions, LinearAlgebra, Random, Statistics
+using KernelFunctions, LinearAlgebra, Random, Statistics, StatsBase
 using Polyester, Parameters
+using Printf
 
 import Base: show
 import MLDataUtils: poslabel, neglabel, classify
@@ -90,476 +91,309 @@ function process_dataset(input_df::DataFrame;
     end
 end
 
-struct ApplyNesterov{T}
-    b::Vector{T}
-    b_old::Vector{T}
-end
-
-function (F::ApplyNesterov)(n, unstable)
-    b, b_old = F.b, F.b_old
-    if unstable # reset acceleration
-        copyto!(b_old, b)
-        n = 1
-    else # Nesterov acceleration
-        γ = (n - 1) / (n + 3 - 1)
-        @inbounds @simd for i in eachindex(b)
-            xi = b[i]
-            yi = b_old[i]
-            zi = xi + γ * (xi - yi)
-            b_old[i] = xi
-            b[i] = zi
-        end
-        n += 1
-    end
-    return n
-end
-
-##### OBJECTIVE #####
-"""
-`eval_objective(Ab::AbstractVector, y, b, p, rho, k, intercept)`
-
-Evaluate ``\\frac{1}{2} \\left[ \\frac{1}{m} \\|y - A \\beta\\|^{2} + \\frac{\\rho}{n-k+1} \\dist(b, S_{k})^{2} \\right]``.
-Assumes `Ab = A * b`. 
-"""
-function eval_objective(grad, Ab, A, y, z, b, p, rho, k)
-    T = eltype(Ab)
-    m, n = length(y), length(b)
-
-    compute_z!(z, Ab, y)
-
-    #
-    # 1/m ∑ max(0, 1 - yᵢ (A*b)ᵢ)^2; empirical risk
-    #
-    axpy!(-one(T), z, Ab)
-    obj = dot(Ab, Ab) / m
-
-    #
-    # rho / (n-k+1) * |P(b) - b|^2 distance penalty; could reduce to BLAS.axpby!
-    #
-    # Notes:
-    #
-    # 1. Vector b has n or n+1 entries, depending on whether intercept is used.
-    # 2. If intercept appears, then P(b_int) - b_int = 0.
-    # 3. P(b) has k or k+1 non-zero entries so P(b) - b has n-k non-zero entries.
-    # 4. The extra 1 is used avoid indeterminate form 0 / 0.
-    #
-    @. grad = b - p
-    dist = dot(grad, grad) / (n - k + 1)
-
-    # 1/m A' * (A*b - z) + rho / (n-k+1) * (b - p)
-    mul!(grad, A', Ab, 1/m, rho / (n-k+1))
-
-    return 1//2 * (obj + rho * dist), 1//2 * dist, dot(grad, grad)
-end
-
-struct EvaluateObjective{T}
-    A::Matrix{T}
-    y::Vector{T}
-    z::Vector{T}
-    b::Vector{T}
-    p::Vector{T}
-    rho::T
-    k::Int
-    grad::Vector{T}
-    Ab::Vector{T}
-end
-
-function (F::EvaluateObjective)(needs_update)
-    if needs_update mul!(F.Ab, F.A, F.b) end
-    return eval_objective(F.grad, F.Ab, F.A, F.y, F.z, F.b, F.p, F.rho, F.k)
-end
-
-##### END OBJECTIVE #####
-
-"""
-Returns a tuple `(pvec, idx)` where `pvec` is a slice into `p` when `intercept == true`
-or `p` otherwise. The vector `idx` is a collection of indices into `pvec`.
-"""
-function get_model_coefficients(p, intercept)
-    n = length(p)
-    if intercept
-        (pvec, idx) = (view(p, 1:n-1), collect(1:n-1))
-    else
-        (pvec, idx) = (p, collect(1:n))
-    end
-    return (pvec, idx)
-end
-
-##### MAIN DRIVER #####
+include("problem.jl")
+include("utilities.jl")
 include("projections.jl")
 
-function _init_weights_!(b, X, y, intercept)
-    m, n = size(X)
-    idx = ifelse(intercept, 1:n-1, 1:n)
-    y_bar = mean(y)
-    @inbounds for j in idx
-        @views x = X[:, j]
-        x_bar = mean(x)
-        A = zero(eltype(b))
-        B = zero(eltype(b))
-        @inbounds for i in 1:m
-            A += (x[i] - x_bar) * (y[i] - y_bar)
-            B += (x[i] - x_bar) ^2
-        end
-        b[j] = B == 0 ? 1e-6*rand() : A / B
-    end
-    if intercept
-        @inbounds b[end] = y_bar
-    end
-    return b
+abstract type AbstractMMAlg end
+
+include(joinpath("algorithms", "SD.jl"))
+include(joinpath("algorithms", "MMSVD.jl"))
+
+const DEFAULT_ANNEALING = geometric_progression
+const DEFAULT_CALLBACK = __do_nothing_callback__
+# const DEFAULT_SCORE_FUNCTION = prediction_error
+
+"""
+    fit(algorithm, problem, s; kwargs...)
+
+Solve optimization problem at sparsity level `s`.
+
+The solution is obtained via a proximal distance `algorithm` that gradually anneals parameter estimates
+toward the target sparsity set.
+"""
+function fit(algorithm::AbstractMMAlg, problem::BinarySVMProblem, s::Real; kwargs...)
+    extras = __mm_init__(algorithm, problem, nothing) # initialize extra data structures
+    SparseSVM.fit!(algorithm, problem, s, extras, (true,false,); kwargs...)
 end
 
 """
-Solve the distance-penalized SVM using algorithm `f` by slowly annealing the
-distance penalty.
+    fit!(algorithm, problem, s, [extras], [update_extras]; kwargs...)
 
-**Note**: The function `f` must have signature `f(b, A, y, tol, k)` where `b`
-represents the model's parameters.
+Same as `fit(algorithm, problem, s)`, but with preallocated data structures in `extras`.
 
-### Arguments
+!!! Note
+    The caller should specify whether to update data structures depending on `s` and `ρ` using `update_extras[1]` and `update_extras[2]`, respectively.
 
-- `f`: A function implementing an optimization algorithm.
-- `A`: The design matrix.
-- `y`: The class labels which must be `1` or `-1`.
-- `tol`: Relative tolerance for objective.
-- `k`: Desired number of nonzero features.
-- `intercept`: A `Bool` indicating whether `A` contains a column of 1s for the intercept.
+    Convergence is determined based on the rule `dist < dtol || abs(dist - old) < rtol * (1 + old)`, where `dist` is the squared distance and `dtol` and `rtol` are tolerance parameters.
 
-### Options
+!!! Tip
+    The `extras` argument can be constructed using `extras = __mm_init__(algorithm, problem, nothing)`.
 
-- `mult`: Multiplier to update rho; i.e. `rho = mult * rho`.
-- `nouter`: Number of subproblems to solve.
-- `rho_init`: Initial value for the penalty coefficient.
+# Keyword Arguments
+
+- `nouter`: The number of outer iterations; i.e. the maximum number of `ρ` values to use in annealing (default=`100`).
+- `dtol`: An absolute tolerance parameter for the squared distance (default=`1e-6`).
+- `rtol`: A relative tolerance parameter for the squared distance (default=`1e-6`).
+- `rho_init`: The initial value for `ρ` (default=1.0).
+- `rho_max`: The maximum value for `ρ` (default=1e8).
+- `rhof`: A function `rhof(ρ, iter, rho_max)` used to determine the next value for `ρ` in the annealing sequence. The default multiplies `ρ` by `1.2`.
+- `verbose`: Print convergence information (default=`false`).
+- `cb`: A callback function for extending functionality.
+
+See also: [`SparseSVM.anneal!`](@ref) for additional keyword arguments applied at the annealing step.
 """
-function annealing(f, A, y, tol, k, intercept; kwargs...)
-    T = eltype(A)
-    b = randn(T, size(A, 2))
-    annealing!(f, b, A, y, tol, k, intercept; kwargs...)
-end
-
-function annealing!(f, b, A, y, tol, k, intercept;
-    init::Bool=true,
-    mult::Real=1.5,
-    ninner::Int=1000,
-    nouter::Int=10,
+function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, s::Real,
+    extras=nothing,
+    update_extras::NTuple{2,Bool}=(true,false,);
+    nouter::Int=100,
+    dtol::Real=1e-6,
+    rtol::Real=1e-6,
     rho_init::Real=1.0,
-    fullsvd::Union{Nothing,SVD}=nothing,
+    rho_max::Real=1e8,
+    rhof::Function=DEFAULT_ANNEALING,
     verbose::Bool=false,
-    )
-    #
-    init && _init_weights_!(b, A, y, intercept)
-    rho = rho_init
-    T = eltype(A) # should be more careful here to make sure BLAS works correctly
-    (obj, dist, old, iters, gradsq) = (zero(T), zero(T), zero(T), 0, zero(T))
-    m, n = size(A)
-
-    # check if svd(A) is needed
-    if f isa typeof(sparse_direct!)
-        extras = alloc_svd_and_extras(A, intercept, fullsvd=fullsvd)
-    else
-        extras = alloc_extras(A, intercept)
+    cb::Function=DEFAULT_CALLBACK,
+    kwargs...)
+    # Check for missing data structures.
+    if extras isa Nothing
+        error("Detected missing data structures for algorithm $(algorithm).")
     end
 
-    # initialize projection and check initial distance
-    p, z, grad, Ab = extras.p, extras.z, extras.grad, extras.buffer[1]
-    pvec, idx = get_model_coefficients(p, intercept)
-    idx_buffer = similar(idx)
-    compute_projection! = function (need_copy)
-        if need_copy
-            copyto!(p, b)
-        end
-        project_sparsity_set!(pvec, idx, k, idx_buffer)
-    end
-    evaluate_objective! = EvaluateObjective(A, y, z, b, p, rho, k, grad, Ab)
+    # Get problem info and extra data structures.
+    @unpack intercept, coeff, coeff_prev, proj = problem
+    @unpack projection = extras
+    
+    # Fix model size(s).
+    k = sparsity_to_k(problem, s)
 
-    compute_projection!(true)
-    _, old, _ = evaluate_objective!(true)
+    # Initialize ρ and iteration count.
+    ρ, iters = rho_init, 0
 
-    verbose && println()
-    for n in 1:nouter
-        # solve problem for fixed rho
-        if verbose
-            print(n,"  ")
-            _, cur_iters, obj, dist, gradsq = @time f(b, A, y, rho, tol, k, intercept, extras,
-                ninner=ninner, verbose=true)
-        else
-            _, cur_iters, obj, dist, gradsq = f(b, A, y, rho, tol, k, intercept, extras, 
-                ninner=ninner, verbose=false)
-        end
-        
-        iters += cur_iters
+    # Update data structures due to hyperparameters.
+    update_extras[1] && __mm_update_sparsity__(algorithm, problem, ρ, k, extras)
+    update_extras[2] && __mm_update_rho__(algorithm, problem, ρ, k, extras)
 
-        if 2*dist < 1e-6 || 2*abs(dist - old) < 1e-6 * (1 + old)
+    # Check initial values for loss, objective, distance, and norm of gradient.
+    apply_projection(projection, problem, k)
+    init_result = __evaluate_objective__(problem, ρ, extras)
+    result = SubproblemResult(0, init_result)
+    cb(0, problem, ρ, k, result)
+    old = sqrt(result.distance)
+
+    for iter in 1:nouter
+        # Solve minimization problem for fixed rho.
+        verbose && print("\n",iter,"  ρ = ",ρ)
+        result = SparseSVM.anneal!(algorithm, problem, ρ, s, extras, (false,true,); verbose=verbose, cb=cb, kwargs...)
+
+        # Update total iteration count.
+        iters += result.iters
+
+        cb(iter, problem, ρ, k, result)
+
+        # Check for convergence to constrained solution.
+        dist = sqrt(result.distance)
+        if dist < dtol || abs(dist - old) < rtol * (1 + old)
             break
         else
           old = dist
         end
                 
-        # update according to annealing schedule
-        rho = mult * rho
+        # Update according to annealing schedule.
+        ρ = ifelse(iter < nouter, rhof(ρ, iter, rho_max), ρ)
     end
     
-    # Project b
-    evaluate_objective! = EvaluateObjective(A, y, z, b, p, rho, k, grad, Ab)
-    compute_projection!(true)
-    obj, dist, gradsq = evaluate_objective!(true)
-    copyto!(b, p)
-    
+    # Project solution to the constraint set.
+    apply_projection(projection, problem, k)
+    loss, obj, dist, gradsq = __evaluate_objective__(problem, ρ, extras)
+
     if verbose
-        print("\niters = ", iters)
-        print("\ndist  = ", dist)
-        print("\nobj   = ", obj)
-        print("\n|∇|²  = ", gradsq)
-        print("\nTotal Time: ")
+        print("\n\niters = ", iters)
+        print("\n1/n ∑ᵢ max{0, 1 - yᵢ xᵢᵀ β}² = ", loss)
+        print("\nobjective  = ", obj)
+        print("\ndistance   = ", sqrt(dist))
+        println("\n|gradient| = ", sqrt(gradsq))
     end
 
-    return iters, obj, dist, gradsq
-end
-
-export annealing, annealing!
-##### END MAIN DRIVER #####
-
-##### MM ALGORITHMS #####
-"""
-Solve the distance-penalized SVM with fixed `rho` via steepest descent.
-
-This version allocates the coefficient vector `b`.
-"""
-function sparse_steepest(A::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, intercept::Bool; kwargs...) where T <: AbstractFloat
-    b = randn(T, size(A, 2))
-    extras = alloc_extras(A, intercept)
-    sparse_steepest!(b, A, y, rho, tol, k, intercept, extras; kwargs...)
+    return SubproblemResult(iters, loss, obj, dist, gradsq)
 end
 
 """
-Solve the distance-penalized SVM with fixed `rho` via steepest descent.
+    anneal(algorithm, problem, ρ, s; kwargs...)
 
-This version updates the coefficient vector `b` and can be used with `annealing`.
+Solve the `ρ`-penalized optimization problem at sparsity level `s`.
 """
-function sparse_steepest!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, intercept::Bool, extras; ninner::Int=1000, verbose::Bool=false) where T <: AbstractFloat
-    (obj, old, iters, dist, gradsq) = (zero(T), zero(T), 0, zero(T), zero(T))
-    m, n = size(A)
+function anneal(algorithm::AbstractMMAlg, problem::BinarySVMProblem, ρ::Real, s::Real; kwargs...)
+    extras = __mm_init__(algorithm, problem, nothing)
+    SparseSVM.anneal!(algorithm, problem, ρ, s, extras, (true,true,); kwargs...)
+end
 
-    # Unpack
-    z, buffer = extras.z, extras.buffer                 # other worker arrays
-    grad = extras.grad                                  # gradient
-    p, pvec, idx = extras.p, extras.pvec, extras.idx    # projection
-    b_old = extras.b_old                                # Nesterov acceleration
+"""
+    anneal!(algorithm, problem, ρ, s, [extras], [update_extras]; kwargs...)
 
-    # Initialize worker arrays.
-    Ab = buffer[1]
+Same as `anneal(algorithm, problem, ρ, s)`, but with preallocated data structures in `extras`.
 
-    # Initialize projection.
-    compute_projection! = ComputeProjection(b, p, pvec, idx, k)
-    
-    # Initialize objective, distance, and gradient.
-    evaluate_objective! = EvaluateObjective(A, y, z, b, p, rho, k, grad, Ab)
-    
-    # Initialize worker array for Nesterov acceleration.
-    copyto!(b_old, b)
-    apply_nesterov! = ApplyNesterov(b, b_old)
-    nest_iter = 1
+!!! Note
+    The caller should specify whether to update data structures depending on `s` and `ρ` using `update_extras[1]` and `update_extras[2]`, respectively.
 
-    for iter = 1:ninner
-        iters = iters + 1
+    Convergence is determined based on the rule `grad < gtol`, where `grad` is the Euclidean norm of the gradient and `gtol` is a tolerance parameter.
 
-        compute_projection!(true)
-        evaluate_objective!(true)
+!!! Tip
+    The `extras` argument can be constructed using `extras = __mm_init__(algorithm, problem, nothing)`.
 
-        # Compute optimal step size.
-        s = dot(grad, grad)
-        mul!(Ab, A, grad)
-        t = dot(Ab, Ab)
-        s = s / (1/m*t + rho/(n-k+1) * s + eps()) # add small bias to prevent NaN
+# Keyword Arguments
 
-        # Update estimates.
-        @. b = b - s * grad
+- `ninner`: The maximum number of iterations (default=`10^4`).
+- `gtol`: An absoluate tolerance parameter on the squared Euclidean norm of the gradient (default=`1e-6`).
+- `nesterov_threshold`: The number of early iterations before applying Nesterov acceleration (default=`10`).
+- `verbose`: Print convergence information (default=`false`).
+- `cb`: A callback function for extending functionality.
+"""
+function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, ρ::Real, s::Real,
+    extras=nothing,
+    update_extras::NTuple{2,Bool}=(true,true);
+    ninner::Int=10^4,
+    gtol::Real=1e-6,
+    nesterov_threshold::Int=10,
+    verbose::Bool=false,
+    cb::Function=DEFAULT_CALLBACK,
+    kwargs...
+    )
+    # Check for missing data structures.
+    if extras isa Nothing
+        error("Detected missing data structures for algorithm $(algorithm).")
+    end
 
-        # Update objective, distance, and gradient.
-        compute_projection!(true)
-        obj, dist, gradsq = evaluate_objective!(true)
-        
+    # Get problem info and extra data structures.
+    @unpack intercept, coeff, coeff_prev, proj = problem
+    @unpack projection = extras
+
+    # Fix model size(s).
+    k = sparsity_to_k(problem, s)
+
+    # Update data structures due to hyperparameters.
+    update_extras[1] && __mm_update_sparsity__(algorithm, problem, ρ, k, extras)
+    update_extras[2] && __mm_update_rho__(algorithm, problem, ρ, k, extras)
+
+    # Check initial values for loss, objective, distance, and norm of gradient.
+    apply_projection(projection, problem, k)
+    result = __evaluate_objective__(problem, ρ, extras)
+    cb(0, problem, ρ, k, result)
+    old = result.objective
+
+    if sqrt(result.gradient) < gtol
+        return SubproblemResult(0, result)
+    end
+
+    # Use previous estimates in case of warm start.
+    copyto!(coeff, coeff_prev)
+
+    # Initialize iteration counts.
+    iters = 0
+    nesterov_iter = 1
+    verbose && @printf("\n%-5s\t%-8s\t%-8s\t%-8s\t%-8s", "iter.", "loss", "objective", "distance", "|gradient|")
+    for iter in 1:ninner
+        iters += 1
+
+        # Apply the algorithm map to minimize the quadratic surrogate.
+        __mm_iterate__(algorithm, problem, ρ, k, extras)
+
+        # Update loss, objective, distance, and gradient.
+        apply_projection(projection, problem, k)
+        result = __evaluate_objective__(problem, ρ, extras)
+
+        cb(iter, problem, ρ, k, result)
+
+        if verbose
+            @printf("\n%4d\t%4.3e\t%4.3e\t%4.3e\t%4.3e", iter, result.loss, result.objective, sqrt(result.distance), sqrt(result.gradient))
+        end
+
         # Assess convergence.
-        has_converged = gradsq < tol
-        if has_converged
+        obj = result.objective
+        if sqrt(result.gradient) < gtol
             break
-        else
-            nest_iter = apply_nesterov!(nest_iter, obj > old)
+        elseif iter < ninner
+            needs_reset = iter < nesterov_threshold || obj > old
+            nesterov_iter = __apply_nesterov__!(coeff, coeff_prev, nesterov_iter, needs_reset)
             old = obj
         end
     end
-    verbose && print(iters,"  ",obj,"  ",dist, "  ",gradsq)
-    return b, iters, obj, dist, gradsq
+    # Save parameter estimates in case of warm start.
+    copyto!(coeff_prev, coeff)
+
+    return SubproblemResult(iters, result)
 end
 
 """
-Solve the distance-penalized SVM with fixed `rho` via normal equations.
+```init!(algorithm, problem, ϵ, λ, [_extras_]; [maxiter=10^3], [gtol=1e-6], [nesterov_threshold=10], [verbose=false])```
 
-This version allocates the coefficient vector `b`.
+Initialize a `problem` with its `λ`-regularized solution.
 """
-function sparse_direct(A::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, intercept::Bool; kwargs...) where T <: AbstractFloat
-    b = randn(eltype(A), size(A, 2))
-    extras = alloc_svd_and_extras(A, intercept)
-    sparse_direct!(b, A, y, rho, tol, k, intercept, extras; kwargs...)
-end
+function init!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, λ, _extras_=nothing;
+    maxiter::Int=10^3,
+    gtol::Real=1e-6,
+    nesterov_threshold::Int=10,
+    verbose::Bool=false,
+    )
+    # Check for missing data structures.
+    extras = __mm_init__(algorithm, problem, _extras_)
 
-"""
-Solve the distance-penalized SVM with fixed `rho` via normal equations.
+    # Get problem info and extra data structures.
+    @unpack coeff, coeff_prev, proj = problem
 
-This version updates the coefficient vector `b` and can be used with `annealing`.
-"""
-function sparse_direct!(b::Vector{T}, A::Matrix{T}, y::Vector{T}, rho::T, tol::T, k::Int, intercept::Bool, extras; ninner::Int=1000, verbose::Bool=false) where T <: AbstractFloat
-    (obj, old, iters, dist, gradsq) = (zero(T), zero(T), 0, zero(T), zero(T))
-    m, n = size(A)
-    
-    # Unpack
-    U, s, V = extras.U, extras.s, extras.V              # SVD
-    grad = extras.grad                                  # gradient
-    z, buffer = extras.z, extras.buffer                 # other worker arrays
-    p, pvec, idx = extras.p, extras.pvec, extras.idx    # projection
-    b_old = extras.b_old                                # Nesterov acceleration
-    
-    # Initialize worker arrays.
-    Ab = buffer[1]
-    d2 = buffer[2]
-    @inbounds for i in eachindex(s)
-        d2[i] = (s[i] / m) / (s[i]^2 / m + rho/(n-k+1))
+    # Update data structures due to hyperparameters.
+    __mm_update_lambda__(algorithm, problem, λ, extras)
+
+    # Initialize coefficients.
+    randn!(coeff)
+    copyto!(coeff_prev, coeff)
+
+    # Check initial values for loss, objective, distance, and norm of gradient.
+    result = __evaluate_reg_objective__(problem, λ, extras)
+    old = result.objective
+
+    if sqrt(result.gradient) < gtol
+        return SubproblemResult(0, result)
     end
-    btmp = buffer[3]
-    D1 = Diagonal(s)
-    D2 = Diagonal(d2)
-    
-    # Initialize projection.
-    compute_projection! = ComputeProjection(b, p, pvec, idx, k)
 
-    # Initialize objective, distance, and gradient.
-    evaluate_objective! = EvaluateObjective(A, y, z, b, p, rho, k, grad, Ab)
+    # Initialize iteration counts.
+    iters = 0
+    nesterov_iter = 1
+    verbose && @printf("\n%-5s\t%-8s\t%-8s\t%-8s", "iter.", "loss", "objective", "|gradient|")
+    for iter in 1:maxiter
+        iters += 1
 
-    # initialize worker array for Nesterov acceleration
-    copyto!(b_old, b)
-    apply_nesterov! = ApplyNesterov(b, b_old)
-    nest_iter = 1
+        # Apply the algorithm map to minimize the quadratic surrogate.
+        __reg_iterate__(algorithm, problem, λ, extras)
 
-    for iter = 1:ninner
-        iters = iters + 1
-        
-        compute_projection!(true)
-        evaluate_objective!(true)
+        # Update loss, objective, and gradient.
+        result = __evaluate_reg_objective__(problem, λ, extras)
 
-        # Update estimates.
-        update_beta!(b, btmp, U, V, D1, D2, z, p) # b == p after this update
-        
-        # Update objective, distance, and gradient.
-        compute_projection!(false)
-        obj, dist, gradsq = evaluate_objective!(true)
-        
+        if verbose
+            @printf("\n%4d\t%4.3e\t%4.3e\t%4.3e", iter, result.loss, result.objective, sqrt(result.gradient))
+        end
+
         # Assess convergence.
-        has_converged = gradsq < tol
-        if has_converged
+        obj = result.objective
+        if sqrt(result.gradient) < gtol
             break
-        else
-            nest_iter = apply_nesterov!(nest_iter, obj > old)
+        elseif iter < maxiter
+            needs_reset = iter < nesterov_threshold || obj > old
+            nesterov_iter = __apply_nesterov__!(coeff, coeff_prev, nesterov_iter, needs_reset)
             old = obj
-        end  
+        end
     end
-    verbose && print(iters,"  ",obj,"  ",dist, "  ",gradsq)
-    return b, iters, obj, dist, gradsq
+    if verbose print("\n\n") end
+
+    # Save parameter estimates in case of warm start.
+    copyto!(coeff_prev, coeff)
+    copyto!(proj, coeff)
+
+    return SubproblemResult(iters, result)
 end
-
-function compute_z!(z, Ab, y)
-    @inbounds @simd for i in eachindex(z)
-        yi, Abi = y[i], Ab[i]
-        z[i] = ifelse(yi*Abi ≤ 1, yi, Abi)
-    end
-end
-
-@inbounds function update_beta!(b, btmp, U, V, D1, D2, z, p)
-    T = eltype(b)
-    r = size(D1, 1)
-    U_block = view(U, :, 1:r)
-    V_block = view(V, :, 1:r)
-
-    # btmp = Σ V' p
-    mul!(btmp, V_block', p)
-    lmul!(D1, btmp)
-
-    # btmp = U' z - btmp
-    mul!(btmp, U_block', z, one(T), -one(T))
-
-    # btmp = [ (1/m Σ² + ρI)⁻¹ 1/m Σ ] btmp
-    lmul!(D2, btmp)
-
-    # b = p = p + V'b
-    mul!(p, V_block, btmp, one(T), one(T))
-    copyto!(b, p)
-end
-
-"""
-Allocate additional arrays used by `sparse_steepest!`.
-"""
-function alloc_extras(A, intercept)    
-    T = eltype(A) # common type; should help make sure linear algebra dispatches to BLAS routines
-    
-    z = similar(A, axes(A, 1)) # stores yᵢ * (Xb)ᵢ or yᵢ
-
-    grad = similar(A, axes(A, 2)) # gradient ∇g
-
-    p = similar(A, axes(A, 2))                       # projection of b, P(b)
-    pvec, idx = get_model_coefficients(p, intercept) # non-intercept coefficients
-
-    b_old = similar(A, axes(A, 2)) # worker array for Nesterov acceleration
-
-    buffer = Vector{Vector{T}}(undef, 3)
-    buffer[1] = similar(A, axes(A, 1))  # for A * b
-    
-    extras = (z=z, grad=grad, p=p, pvec=pvec, idx=idx, b_old=b_old, buffer=buffer)
-
-    return extras
-end
-
-"""
-Compute `svd(X)` and allocate additional arrays used by `sparse_direct!`.
-"""
-function alloc_svd_and_extras(A, intercept; fullsvd::Union{Nothing,SVD}=nothing)
-    T = eltype(A) # common type; should help make sure linear algebra dispatches to BLAS routines
-
-    if fullsvd isa SVD
-        Asvd = fullsvd
-    else
-        Asvd = svd(A)
-    end
-
-    U = Asvd.U # left singular vectors
-    s = Asvd.S # singular values
-    V = Asvd.V # right singular vectors
-
-    z = similar(A, axes(A, 1)) # stores yᵢ * (Xb)ᵢ or yᵢ
-
-    grad = similar(A, axes(A, 2)) # gradient ∇g
-
-    p = similar(A, axes(A, 2))                       # projection of b, P(b)
-    pvec, idx = get_model_coefficients(p, intercept) # non-intercept coefficients
-
-    b_old = similar(A, axes(A, 2)) # worker array for Nesterov acceleration
-
-    buffer = Vector{Vector{T}}(undef, 3)
-    buffer[1] = similar(A, axes(A, 1))  # for A * b
-    buffer[2] = similar(s)              # for diagonal a^2 Σ / (a^2 Σ^2 + b^2 I)
-    buffer[3] = similar(s)              # for updating β
-    
-    extras = (U=U, s=s, V=V, z=z, grad=grad, p=p, pvec=pvec, idx=idx, b_old=b_old, buffer=buffer)
-
-    return extras
-end
-
-export sparse_direct, sparse_direct!, sparse_steepest, sparse_steepest!
-##### END MM ALGORITHMS #####
-
-##### CLASSIFICATION #####
-include("problem.jl")
 
 export MultiClassStrategy, OVO, OVR
 export BinarySVMProblem, MultiSVMProblem
-##### END CLASSIFICATION #####
+export MMSVD, SD
 
 end # end module
