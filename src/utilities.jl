@@ -162,7 +162,7 @@ function apply_projection(projection, problem, k)
 
     # projection step, might not be unique
     if problem.intercept
-        projection(view(proj, idx, :), k)
+        projection(view(proj, idx), k)
     else
         projection(proj, k)
     end
