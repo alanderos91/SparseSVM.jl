@@ -117,6 +117,11 @@ function fit(algorithm::AbstractMMAlg, problem::BinarySVMProblem, s::Real; kwarg
     SparseSVM.fit!(algorithm, problem, s, extras, (true,false,); kwargs...)
 end
 
+function fit(algorithm::AbstractMMAlg, problem::MultiSVMProblem, s::Real; kwargs...)
+    extras = [__mm_init__(algorithm, svm, nothing) for svm in problem.svm] # initialize extra data structures
+    SparseSVM.fit!(algorithm, problem, s, extras, (true,false,); kwargs...)
+end
+
 """
     fit!(algorithm, problem, s, [extras], [update_extras]; kwargs...)
 
@@ -125,7 +130,7 @@ Same as `fit(algorithm, problem, s)`, but with preallocated data structures in `
 !!! Note
     The caller should specify whether to update data structures depending on `s` and `ρ` using `update_extras[1]` and `update_extras[2]`, respectively.
 
-    Convergence is determined based on the rule `dist < dtol || abs(dist - old) < rtol * (1 + old)`, where `dist` is the squared distance and `dtol` and `rtol` are tolerance parameters.
+    Convergence is determined based on the rule `dist < dtol || abs(dist - old) < rtol * (1 + old)`, where `dist` is the distance and `dtol` and `rtol` are tolerance parameters.
 
 !!! Tip
     The `extras` argument can be constructed using `extras = __mm_init__(algorithm, problem, nothing)`.
@@ -216,6 +221,43 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, s::Real,
     end
 
     return SubproblemResult(iters, loss, obj, dist, gradsq)
+end
+
+function fit!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, s::Real,
+    extras=nothing,
+    update_extras::NTuple{2,Bool}=(true,false,);
+    kwargs...)
+    # Check for missing data structures.
+    if extras isa Nothing
+        error("Detected missing data structures for algorithm $(algorithm).")
+    end
+    
+    n = length(problem.svm)
+    total_iter, total_loss, total_objv, total_dist, total_grad = 0, 0.0, 0.0, 0.0, 0.0
+
+    # Create closure to fit a particular SVM.
+    function __fit__!(k)
+        subproblem = problem.svm[k]
+        r = SparseSVM.fit!(algorithm, subproblem, s, extras[k], update_extras; kwargs...)
+        i, l, o, d, g = r
+        total_iter += i
+        total_loss += l
+        total_objv += o
+        total_dist += d
+        total_grad += g
+        return r
+    end
+
+    # Fit each SVM to build the classifier.
+    result = __fit__!(1)
+    results = [result]
+    for k in 2:n
+        result = __fit__!(k)
+        push!(results, result)
+    end
+    total = SubproblemResult(total_iter, IterationResult(total_loss, total_objv, total_dist, total_grad))
+
+    return (; total=total, result=results)
 end
 
 """
@@ -390,6 +432,35 @@ function init!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, λ, _extras_
     copyto!(proj, coeff)
 
     return SubproblemResult(iters, result)
+end
+
+function init!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, λ, extras=nothing; kwargs...)
+    n = length(problem.svm)
+    total_iter, total_loss, total_objv, total_dist, total_grad = 0, 0.0, 0.0, 0.0, 0.0
+
+    # Create closure to fit a particular SVM.
+    function __init__!(k)
+        subproblem = problem.svm[k]
+        r = SparseSVM.init!(algorithm, subproblem, λ, extras; kwargs...)
+        i, l, o, d, g = r
+        total_iter += i
+        total_loss += l
+        total_objv += o
+        total_dist += d
+        total_grad += g
+        return r
+    end
+
+    # Fit each SVM to build the classifier.
+    result = __init__!(1)
+    results = [result]
+    for k in 2:n
+        result = __init__!(k)
+        push!(results, result)
+    end
+    total = SubproblemResult(total_iter, IterationResult(total_loss, total_objv, total_dist, total_grad))
+
+    return (; total=total, result=results)
 end
 
 export MultiClassStrategy, OVO, OVR
