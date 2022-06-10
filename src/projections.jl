@@ -11,26 +11,18 @@ function project_l0_ball!(x, idx, k, buffer)
     if k ≤ 0 return fill!(x, 0) end
     
     # otherwise, find the spliting element
-    search_by_top_k = k < n-k+1
-    if search_by_top_k
-        _k = k
-        pivot = l0_search_partialsort!(idx, x, _k, true)
-    else
-        _k = n-k+1
-        pivot = l0_search_partialsort!(idx, x, _k, false)
-    end
+    # search_by_top_k = k < n-k+1
+    # if search_by_top_k
+    #     _k = k
+    #     pivot = l0_search_partialsort!(idx, x, _k, true)
+    # else
+    #     _k = n-k+1
+    #     pivot = l0_search_partialsort!(idx, x, _k, false)
+    # end
+    pivot = l0_search_partialsort!(idx, x, k, true)
     
     # preserve the top k elements
-    p = abs(pivot)
-    nonzero_count = 0
-    @inbounds for i in eachindex(x)
-        if x[i] == 0 continue end
-        if abs(x[i]) < p
-            x[i] = 0
-        else
-            nonzero_count += 1
-        end
-    end
+    nonzero_count = __threshold__!(x, abs(pivot))
 
     # resolve ties
     if nonzero_count > k
@@ -38,12 +30,36 @@ function project_l0_ball!(x, idx, k, buffer)
         _buffer_ = view(buffer, 1:number_to_drop)
         _indexes_ = findall(!iszero, x)
         sample!(_indexes_, _buffer_, replace=false)
-        @inbounds for i in _buffer_
-            x[i] = 0
+        if x isa CUDA.CuArray
+            x[_buffer_] .= 0
+        else
+            @inbounds for i in _buffer_
+                x[i] = 0
+            end
         end
     end
 
     return x
+end
+
+function __threshold__!(x, abs_pivot)
+    nonzero_count = 0
+    @inbounds for i in eachindex(x)
+        if x[i] == 0 continue end
+        if abs(x[i]) < abs_pivot
+            x[i] = 0
+        else
+            nonzero_count += 1
+        end
+    end
+    return nonzero_count
+end
+
+function __threshold__!(x::CUDA.CuArray, abs_pivot)
+    idx_to_threshold = abs.(x) .< abs_pivot
+    zero_count = sum(idx_to_threshold)
+    x[idx_to_threshold] .= 0
+    return length(x) - zero_count
 end
 
 """
@@ -75,13 +91,24 @@ function l0_search_partialsort!(idx, x, k, rev::Bool)
     return x[idx[k]]
 end
 
-struct L0Projection <: Function
-    idx::Vector{Int}
-    buffer::Vector{Int}
+# this is incorrect!
+function l0_search_partialsort!(idx, x::CUDA.CuArray, k, rev::Bool)
+    CUDA.sortperm!(idx, x, by=abs, lt=isless, rev=rev)
+    return CUDA.@allowscalar x[idx[k]]
+end
 
-    function L0Projection(n::Int)
-        new(collect(1:n), Vector{Int}(undef, n))
+struct L0Projection{VT} <: Function
+    idx::VT
+    buffer::VT
+end
+
+function L0Projection(n::Integer, use_CuArray::Bool)
+    if use_CuArray
+        idx = CUDA.CuArray(collect(1:n))
+    else
+        idx = collect(1:n)
     end
+    return L0Projection(idx, similar(idx))
 end
 
 function (P::L0Projection)(x, k)

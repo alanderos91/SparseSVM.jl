@@ -12,7 +12,9 @@ function __mm_init__(::SD, problem::BinarySVMProblem, ::Nothing)
     # worker arrays
     z = similar(X, n)
 
-    return (; projection=L0Projection(nparams), z=z,)
+    use_CuArray = X isa CUDA.AnyCuArray
+
+    return (; projection=L0Projection(nparams, use_CuArray), z=z,)
 end
 
 # Check for data structure allocations; otherwise initialize.

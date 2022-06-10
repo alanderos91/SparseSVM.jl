@@ -20,11 +20,13 @@ function __mm_init__(::MMSVD, problem::BinarySVMProblem, ::Nothing)
     buffer = similar(X, r)
     
     # diagonal matrices
-    Ψ = Diagonal(Vector{T}(undef, r))
+    Ψ = Diagonal(similar(X, r))
     # VΨVt = similar(X, length(coeff), length(coeff))
 
+    use_CuArray = X isa CUDA.AnyCuArray
+
     return (;
-        projection=L0Projection(nparams),
+        projection=L0Projection(nparams, use_CuArray),
         U=U, s=s, V=V,
         z=z, Ψ=Ψ, #VΨVt=VΨVt,
         buffer=buffer,
@@ -53,15 +55,24 @@ __mm_update_lambda__(::MMSVD, problem::BinarySVMProblem, λ, extras) = update_di
 function update_diagonal(problem::BinarySVMProblem, λ, extras)
     @unpack s, Ψ = extras
     n, _, _ = probdims(problem)
-    a², b² = 1/n, λ
+    T = floattype(problem)
+    a², b² = convert(T, 1/n), convert(T, λ)
 
-    # Update the diagonal matrices Ψ = (a² Σ²) / (a² Σ² + b² I).
-    for i in eachindex(Ψ.diag)
-        sᵢ² = s[i]^2
-        Ψ.diag[i] = a² * sᵢ² / (a² * sᵢ² + b²)
-    end
+    # Update the diagonal matrix Ψ = (a² Σ²) / (a² Σ² + b² I).
+    __update_diagonal__(Ψ.diag, s, a², b²)
 
     return nothing
+end
+
+function __update_diagonal__(diag, s, a², b²)
+    for i in eachindex(diag)
+        sᵢ² = s[i]^2
+        diag[i] = a² * sᵢ² / (a² * sᵢ² + b²)
+    end
+end
+
+function __update_diagonal__(diag::CUDA.CuArray, s::CUDA.CuArray, a², b²)
+    @. diag = (a² * (s^2)) / (a² * (s^2) + b²)
 end
 
 # function update_matrices(problem::BinarySVMProblem, λ, extras)

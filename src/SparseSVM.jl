@@ -8,6 +8,7 @@ using Printf
 
 import Base: show
 import MLDataUtils: poslabel, neglabel, classify
+import CUDA
 
 ##### DATA #####
 

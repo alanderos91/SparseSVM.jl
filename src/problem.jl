@@ -13,16 +13,27 @@ determine_number_svms(::OVR, c) = c
 has_inferrable_encoding(::Type{T}) where T <: Union{Number,AbstractString,Symbol} = true
 has_inferrable_encoding(x) = false
 
-function create_X_and_K(kernel::Kernel, data, intercept) where T<:Real
+function create_X_and_K(kernel::Kernel, data, intercept)
     K = kernelmatrix(kernel, data, obsdim=1)
-    intercept && (K = [K ones(size(K, 1))])
+    T = eltype(K)
+    intercept && (K = [K ones(T, size(K, 1))])
     X = copy(data)
     return X, K
 end
 
-function create_X_and_K(::Nothing, data, intercept) where T<:Real
-    X = intercept ? [data ones(size(data, 1))] : copy(data)
+function create_X_and_K(::Nothing, data, intercept)
+    T = eltype(data)
+    X = intercept ? [data ones(T, size(data, 1))] : copy(data)
     return X, nothing
+end
+
+function alloc_targets!(y, l, me, oe)
+    y .= convertlabel.(me, l, oe)
+end
+
+function alloc_targets!(y::CUDA.CuArray, l, me, oe)
+    y_cpu = convertlabel(me, l, oe)
+    copyto!(y, y_cpu)
 end
 
 abstract type AbstractSVM end
@@ -115,7 +126,7 @@ function BinarySVMProblem(labels, data, positive_label::S, coeff, coeff_prev, pr
     end
     margin_encoding = LabelEnc.MarginBased(T)
     y = similar(data, n)
-    y .= convertlabel.(margin_encoding, labels, ovr_encoding)
+    alloc_targets!(y, labels, margin_encoding, ovr_encoding)
 
     # Create design matrices.
     X, K = create_X_and_K(kernel, data, intercept)
@@ -211,7 +222,7 @@ predict(problem::BinarySVMProblem, x) = __predict__(problem.kernel, problem, x)
 function __predict__(::Nothing, problem::BinarySVMProblem, x::AbstractVector)
     @unpack p, proj, intercept = problem
     β = view(proj, 1:p)
-    β0 = proj[p+intercept]
+    CUDA.@allowscalar β0 = proj[p+intercept]
     yhat = dot(view(x, 1:p), β)
     intercept && (yhat += β0)
     return yhat
@@ -220,7 +231,7 @@ end
 function __predict__(::Nothing, problem::BinarySVMProblem, X::AbstractMatrix)
     @unpack p, proj, intercept = problem
     β = view(proj, 1:p)
-    β0 = proj[p+intercept]
+    CUDA.@allowscalar β0 = proj[p+intercept]
     yhat = view(X, :, 1:p) * β
     intercept && (yhat += β0)
     return yhat
@@ -280,6 +291,12 @@ function __classify__(problem::BinarySVMProblem, y::AbstractVector)
     end
     BLAS.set_num_threads(nthreads)
     return label
+end
+
+function __classify__(problem::BinarySVMProblem, y::CUDA.CuArray)
+    y_cpu = similar(Vector{eltype(y)}, length(y))
+    copyto!(y_cpu, y)
+    __classify__(problem, y_cpu)
 end
 
 struct MultiSVMProblem{T,S,BSVMT,dataT,kernT,stratT,encT,coeffT} <: AbstractSVM

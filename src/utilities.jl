@@ -6,21 +6,10 @@ function shifted_response!(z, y, Xβ)
     return nothing
 end
 
-# function shifted_response!(z::CuArray, y::CuArray, Xβ::CuArray)
-#     numthreads = 512
-#     numblocks = ceil(Int, length(z) / numthreads)
-#     @cuda threads=numthreads blocks=numblocks __shifted_response__!(z, y, Xβ)
-# end
-
-# function __shifted_response__!(z, y, Xβ)
-#     index = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-#     stride = gridDim().x * blockDim().x
-#     @inbounds for i = index:stride:length(z)
-#         yi, Xβi = y[i], Xβ[i]
-#         z[i] = ifelse(yi*Xβi < 1, yi, Xβi)
-#     end
-#     return nothing
-# end
+function shifted_response!(z::CUDA.CuArray, y::CUDA.CuArray, Xβ::CUDA.CuArray)
+    @. z = ifelse(y * Xβ < 1, y, Xβ)
+    return nothing
+end
 
 """
 Generic template for evaluating residuals.
@@ -135,6 +124,21 @@ function __apply_nesterov__!(x, y, iter::Integer, needs_reset::Bool, r::Int=3)
             zi = xi + γ * (xi - yi)
             x[i], y[i] = zi, xi
         end
+        iter += 1
+    end
+
+    return iter
+end
+
+function __apply_nesterov__!(x::CUDA.CuArray, y::CUDA.CuArray, iter::Integer, needs_reset::Bool, r::Int=3)
+    if needs_reset # Reset acceleration scheme
+        copyto!(y, x)
+        iter = 1
+    else # Nesterov acceleration 
+        γ = (iter - 1) / (iter + r - 1)
+        z = @. x + γ * (x - y)
+        copyto!(y, x)
+        copyto!(x, z)
         iter += 1
     end
 
