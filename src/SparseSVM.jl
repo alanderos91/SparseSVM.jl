@@ -104,6 +104,10 @@ const DEFAULT_ANNEALING = geometric_progression
 const DEFAULT_CALLBACK = __do_nothing_callback__
 # const DEFAULT_SCORE_FUNCTION = prediction_error
 
+const DEFAULT_GTOL = 1e-3
+const DEFAULT_DTOL = 1e-3
+const DEFAULT_RTOL = 1e-6
+
 """
     fit(algorithm, problem, s; kwargs...)
 
@@ -152,8 +156,8 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, s::Real,
     extras=nothing,
     update_extras::NTuple{2,Bool}=(true,false,);
     nouter::Int=100,
-    dtol::Real=1e-6,
-    rtol::Real=1e-6,
+    dtol::Real=DEFAULT_DTOL,
+    rtol::Real=DEFAULT_RTOL,
     rho_init::Real=1.0,
     rho_max::Real=1e8,
     rhof::Function=DEFAULT_ANNEALING,
@@ -295,7 +299,7 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, ρ::Real, 
     extras=nothing,
     update_extras::NTuple{2,Bool}=(true,true);
     ninner::Int=10^4,
-    gtol::Real=1e-6,
+    gtol::Real=DEFAULT_GTOL,
     nesterov_threshold::Int=10,
     verbose::Bool=false,
     cb::Function=DEFAULT_CALLBACK,
@@ -373,7 +377,7 @@ Initialize a `problem` with its `λ`-regularized solution.
 """
 function init!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, λ, _extras_=nothing;
     maxiter::Int=10^3,
-    gtol::Real=1e-6,
+    gtol::Real=DEFAULT_GTOL,
     nesterov_threshold::Int=10,
     verbose::Bool=false,
     )
