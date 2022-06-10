@@ -23,10 +23,8 @@ function __mm_init__(::MMSVD, problem::BinarySVMProblem, ::Nothing)
     Ψ = Diagonal(similar(X, r))
     # VΨVt = similar(X, length(coeff), length(coeff))
 
-    use_CuArray = X isa CUDA.AnyCuArray
-
     return (;
-        projection=L0Projection(nparams, use_CuArray),
+        projection=L0Projection(nparams),
         U=U, s=s, V=V,
         z=z, Ψ=Ψ, #VΨVt=VΨVt,
         buffer=buffer,
@@ -69,10 +67,6 @@ function __update_diagonal__(diag, s, a², b²)
         sᵢ² = s[i]^2
         diag[i] = a² * sᵢ² / (a² * sᵢ² + b²)
     end
-end
-
-function __update_diagonal__(diag::CUDA.CuArray, s::CUDA.CuArray, a², b²)
-    @. diag = (a² * (s^2)) / (a² * (s^2) + b²)
 end
 
 # function update_matrices(problem::BinarySVMProblem, λ, extras)

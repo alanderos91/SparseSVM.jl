@@ -6,11 +6,6 @@ function shifted_response!(z, y, Xβ)
     return nothing
 end
 
-function shifted_response!(z::CUDA.CuArray, y::CUDA.CuArray, Xβ::CUDA.CuArray)
-    @. z = ifelse(y * Xβ < 1, y, Xβ)
-    return nothing
-end
-
 """
 Generic template for evaluating residuals.
 This assumes that projections have been handled externally.
@@ -28,7 +23,7 @@ function __evaluate_residuals__(problem::BinarySVMProblem, extras, need_main::Bo
     X = get_design_matrix(problem)
     T = SparseSVM.floattype(problem)
     n, _, _ = probdims(problem)
-
+    
     if need_main # 1/sqrt(n) * (zₘ - X*β)
         a = convert(T, 1 / sqrt(n))
         mul!(r, X, β)
@@ -82,29 +77,31 @@ This assumes that projections have been handled externally.
 """
 function __evaluate_objective__(problem, ρ, extras)
     @unpack res, grad = problem
+    r, q, ∇g = res.main, res.dist, grad
 
     __evaluate_residuals__(problem, extras, true, true)
     __evaluate_gradient__(problem, ρ, extras)
 
-    r, q, ∇g = res.main, res.dist, grad
     loss = dot(r, r) # 1/n * ∑ᵢ (zᵢ - X*β)²
     dist = dot(q, q) # ∑ⱼ (P(βₘ) - β)²
-    obj = 1//2 * (loss + ρ * dist)
     gradsq = dot(∇g, ∇g)
+    obj = 1//2 * (loss + ρ * dist)
 
     return IterationResult(loss, obj, dist, gradsq)
 end
 
 function __evaluate_reg_objective__(problem, λ, extras)
     @unpack coeff, res, grad = problem
+    β, r, ∇g = coeff, res.main, grad
+    T = floattype(problem)
 
-    __evaluate_residuals__(problem, extras, true, true)
+    __evaluate_residuals__(problem, extras, true, false)
     __evaluate_reg_gradient__(problem, λ, extras)
 
-    β, r, ∇g = coeff, res.main, grad
     loss = dot(r, r) # 1/n * ∑ᵢ (zᵢ - X*β)²
-    objective = 1//2 * (loss + λ * dot(β, β))
     gradsq = dot(∇g, ∇g)
+    penalty = dot(β, β)
+    objective = 1//2 * (loss + λ * penalty)
 
     return IterationResult(loss, objective, 0.0, gradsq)
 end
@@ -124,21 +121,6 @@ function __apply_nesterov__!(x, y, iter::Integer, needs_reset::Bool, r::Int=3)
             zi = xi + γ * (xi - yi)
             x[i], y[i] = zi, xi
         end
-        iter += 1
-    end
-
-    return iter
-end
-
-function __apply_nesterov__!(x::CUDA.CuArray, y::CUDA.CuArray, iter::Integer, needs_reset::Bool, r::Int=3)
-    if needs_reset # Reset acceleration scheme
-        copyto!(y, x)
-        iter = 1
-    else # Nesterov acceleration 
-        γ = (iter - 1) / (iter + r - 1)
-        z = @. x + γ * (x - y)
-        copyto!(y, x)
-        copyto!(x, z)
         iter += 1
     end
 

@@ -30,12 +30,8 @@ function project_l0_ball!(x, idx, k, buffer)
         _buffer_ = view(buffer, 1:number_to_drop)
         _indexes_ = findall(!iszero, x)
         sample!(_indexes_, _buffer_, replace=false)
-        if x isa CUDA.CuArray
-            x[_buffer_] .= 0
-        else
-            @inbounds for i in _buffer_
-                x[i] = 0
-            end
+        @inbounds for i in _buffer_
+            x[i] = 0
         end
     end
 
@@ -53,13 +49,6 @@ function __threshold__!(x, abs_pivot)
         end
     end
     return nonzero_count
-end
-
-function __threshold__!(x::CUDA.CuArray, abs_pivot)
-    idx_to_threshold = abs.(x) .< abs_pivot
-    zero_count = sum(idx_to_threshold)
-    x[idx_to_threshold] .= 0
-    return length(x) - zero_count
 end
 
 """
@@ -91,23 +80,13 @@ function l0_search_partialsort!(idx, x, k, rev::Bool)
     return x[idx[k]]
 end
 
-# this is incorrect!
-function l0_search_partialsort!(idx, x::CUDA.CuArray, k, rev::Bool)
-    CUDA.sortperm!(idx, x, by=abs, lt=isless, rev=rev)
-    return CUDA.@allowscalar x[idx[k]]
-end
-
 struct L0Projection{VT} <: Function
     idx::VT
     buffer::VT
 end
 
-function L0Projection(n::Integer, use_CuArray::Bool)
-    if use_CuArray
-        idx = CUDA.CuArray(collect(1:n))
-    else
-        idx = collect(1:n)
-    end
+function L0Projection(n::Integer)
+    idx = collect(1:n)
     return L0Projection(idx, similar(idx))
 end
 

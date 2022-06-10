@@ -392,7 +392,6 @@ function init!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, λ, _extras_
     __mm_update_lambda__(algorithm, problem, λ, extras)
 
     # Initialize coefficients.
-    randn!(coeff)
     copyto!(coeff_prev, coeff)
 
     # Check initial values for loss, objective, distance, and norm of gradient.

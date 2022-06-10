@@ -31,11 +31,6 @@ function alloc_targets!(y, l, me, oe)
     y .= convertlabel.(me, l, oe)
 end
 
-function alloc_targets!(y::CUDA.CuArray, l, me, oe)
-    y_cpu = convertlabel(me, l, oe)
-    copyto!(y, y_cpu)
-end
-
 abstract type AbstractSVM end
 
 struct BinarySVMProblem{T,S,YT,XT,KT,LT,encT,kernT,coeffT,resT,gradT} <: AbstractSVM
@@ -222,7 +217,7 @@ predict(problem::BinarySVMProblem, x) = __predict__(problem.kernel, problem, x)
 function __predict__(::Nothing, problem::BinarySVMProblem, x::AbstractVector)
     @unpack p, proj, intercept = problem
     β = view(proj, 1:p)
-    CUDA.@allowscalar β0 = proj[p+intercept]
+    β0 = proj[p+intercept]
     yhat = dot(view(x, 1:p), β)
     intercept && (yhat += β0)
     return yhat
@@ -231,7 +226,7 @@ end
 function __predict__(::Nothing, problem::BinarySVMProblem, X::AbstractMatrix)
     @unpack p, proj, intercept = problem
     β = view(proj, 1:p)
-    CUDA.@allowscalar β0 = proj[p+intercept]
+    β0 = proj[p+intercept]
     yhat = view(X, :, 1:p) * β
     intercept && (yhat += β0)
     return yhat
@@ -291,12 +286,6 @@ function __classify__(problem::BinarySVMProblem, y::AbstractVector)
     end
     BLAS.set_num_threads(nthreads)
     return label
-end
-
-function __classify__(problem::BinarySVMProblem, y::CUDA.CuArray)
-    y_cpu = similar(Vector{eltype(y)}, length(y))
-    copyto!(y_cpu, y)
-    __classify__(problem, y_cpu)
 end
 
 struct MultiSVMProblem{T,S,BSVMT,dataT,kernT,stratT,encT,coeffT} <: AbstractSVM

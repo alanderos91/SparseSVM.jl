@@ -12,9 +12,7 @@ function __mm_init__(::SD, problem::BinarySVMProblem, ::Nothing)
     # worker arrays
     z = similar(X, n)
 
-    use_CuArray = X isa CUDA.AnyCuArray
-
-    return (; projection=L0Projection(nparams, use_CuArray), z=z,)
+    return (; projection=L0Projection(nparams), z=z,)
 end
 
 # Check for data structure allocations; otherwise initialize.
@@ -79,7 +77,7 @@ function __reg_iterate__(::SD, problem::BinarySVMProblem, λ, extras)
     mul!(X∇g, X, ∇g)
     C1 = dot(∇g, ∇g)
     C2 = dot(X∇g, X∇g)
-    t = ifelse(iszero(C1) && iszero(C2), 0.0, C1 / (a²*C2 + b²*C1))
+    t = ifelse(iszero(C1) && iszero(C2), zero(T), C1 / (a²*C2 + b²*C1))
 
     # Move in the direction of steepest descent.
     axpy!(-t, ∇g, β)
