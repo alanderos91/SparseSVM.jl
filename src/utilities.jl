@@ -173,8 +173,8 @@ Placeholder for callbacks in main functions.
 __do_nothing_callback__(iter, problem, rho, k, history) = nothing
 # __do_nothing_callback__(fold, problem, train_problem, data, lambda, sparsity, model_size, result) = nothing
 
-__svd_wrapper__(A::StridedMatrix) = svd(A)
-__svd_wrapper__(A::AbstractMatrix) = svd!(copy(A))
+__svd_wrapper__(A::StridedMatrix) = svd(A, full=false)
+__svd_wrapper__(A::AbstractMatrix) = svd!(copy(A), full=false)
 
 struct IterationResult
     loss::Float64
