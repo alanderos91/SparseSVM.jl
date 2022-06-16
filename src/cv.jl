@@ -13,9 +13,10 @@ Split data in `problem` into train-validation and test sets, then run cross-vali
 
 - `at`: A value between `0` and `1` indicating the proportion of samples/instances used for cross-validation, with remaining samples used for a test set (default=`0.8`).
 """
-function cv(algorithm::AbstractMMAlg, problem::BinarySVMProblem, grid::G; at::Real=0.8, kwargs...) where G
+function cv(algorithm::AbstractMMAlg, problem, grid::G; at::Real=0.8, kwargs...) where G
     # Split data into cross-validation and test sets.
-    @unpack p, labels, X, intercept = problem
+    @unpack p, labels, intercept = problem
+    X = get_problem_data(problem)
     dataset_split = splitobs((labels, view(X, :, 1:p)), at=at, obsdim=1)
     SparseSVM.cv(algorithm, problem, grid, dataset_split; kwargs...)
 end
@@ -36,7 +37,7 @@ Hyperparameter values are specified in `grid`, and data subsets are given as `da
 
 Additional arguments are propagated to `fit` and `anneal`. See also [`SparseSVM.fit`](@ref) and [`SparseSVM.anneal`](@ref).
 """
-function cv(algorithm::AbstractMMAlg, problem::BinarySVMProblem, grid::G, dataset_split::Tuple{S1,S2};
+function cv(algorithm::AbstractMMAlg, problem, grid::G, dataset_split::Tuple{S1,S2};
     lambda::Real=1e-3,
     maxiter::Int=10^4,
     tol::Real=1e-4,
@@ -88,13 +89,12 @@ function cv(algorithm::AbstractMMAlg, problem::BinarySVMProblem, grid::G, datase
         foreach(X -> StatsBase.transform!(F, X), (train_X, val_X, test_X))
         
         # Create a problem object for the training set.
-        train_idx = parentindices(train_Y)
+        train_idx = extract_indices(problem, train_Y)
         train_problem = change_data(problem, train_Y, train_X)
         extras = __mm_init__(algorithm, train_problem, nothing)
+        set_initial_coefficients!(train_problem, problem, train_idx)
 
         for (i, s) in enumerate(grid)
-            set_initial_coefficients!(train_problem, problem, train_idx)
-
             # Obtain solution as function of s.
             if s != 0.0
                 result.time[k][i] = @elapsed SparseSVM.fit!(algorithm, train_problem, s, extras, (true, false,);
@@ -106,6 +106,7 @@ function cv(algorithm::AbstractMMAlg, problem::BinarySVMProblem, grid::G, datase
                 )
             end
             copyto!(train_problem.coeff, train_problem.proj)
+            copy_to_buffer!(train_problem)
 
             # Evaluate the solution.
             r = scoref(train_problem, (train_Y, train_X), (val_Y, val_X), (test_Y, test_X))
@@ -124,14 +125,15 @@ function cv(algorithm::AbstractMMAlg, problem::BinarySVMProblem, grid::G, datase
     return result
 end
 
-function repeated_cv(algorithm::AbstractMMAlg, problem::BinarySVMProblem, grid::G; at::Real=0.8, kwargs...) where G
+function repeated_cv(algorithm::AbstractMMAlg, problem, grid::G; at::Real=0.8, kwargs...) where G
     # Split data into cross-validation and test sets.
-    @unpack p, labels, X, intercept = problem
+    @unpack p, labels, intercept = problem
+    X = get_problem_data(problem)
     dataset_split = splitobs((labels, view(X, :, 1:p)), at=at, obsdim=1)
     SparseSVM.repeated_cv(algorithm, problem, grid, dataset_split; kwargs...)
 end
 
-function repeated_cv(algorithm::AbstractMMAlg, problem::BinarySVMProblem, grid::G, dataset_split::Tuple{S1,S2};
+function repeated_cv(algorithm::AbstractMMAlg, problem, grid::G, dataset_split::Tuple{S1,S2};
     nreplicates::Int=10,
     show_progress::Bool=true,
     rng::AbstractRNG=StableRNG(1903),

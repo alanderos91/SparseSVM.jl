@@ -174,6 +174,11 @@ __get_design_matrix__(::Nothing, problem::BinarySVMProblem) = problem.X  # linea
 __get_design_matrix__(::Kernel, problem::BinarySVMProblem) = problem.K   # nonlinear case
 
 """
+Return the data matrix used to fit the SVM.
+"""
+get_problem_data(problem::BinarySVMProblem) = problem.X
+
+"""
 Returns the number of samples, number of features, and number of categories, respectively.
 """
 probdims(problem::BinarySVMProblem) = (problem.n, problem.p, 2)
@@ -269,11 +274,13 @@ function __predict__(::Nothing, problem::BinarySVMProblem, X::AbstractMatrix)
 end
 
 function __predict__(::Kernel, problem::BinarySVMProblem, _x::AbstractVector)
-    x = view(_x, 1:n)
+    @unpack n, p, intercept = problem
+    x = view(_x, 1:p)
     κ = problem.kernel
     α = view(problem.proj, 1:n)
     α0 = problem.proj[n+intercept]
     X = problem.X
+    y = problem.y
     yhat = zero(floattype(problem))
     for (j, xⱼ) in enumerate(eachrow(X))
         yhat += α[j] * y[j] * κ(x, xⱼ)
@@ -358,8 +365,7 @@ struct MultiSVMProblem{T,S,BSVMT,dataT,kernT,stratT,encT,coeffT} <: AbstractSVM
     end
 end
 
-function __construct_svms__(::OVO, nsvms, labels, data, coeff, coeff_prev, proj, intercept, kernel, _ignore_)
-    lm = labelmap(labels)
+function __construct_svms__(::OVO, lm, nsvms, labels, data, coeff, coeff_prev, proj, intercept, kernel, _ignore_)
     ul = sort!(collect(keys(lm)))
     labeled_data = (labels, data)
 
@@ -368,7 +374,15 @@ function __construct_svms__(::OVO, nsvms, labels, data, coeff, coeff_prev, proj,
         pl, nl = ul[i], ul[j]
         idx = sort!(union(lm[pl], lm[nl]))
         ls, ds = datasubset(labeled_data, idx, obsdim=1)
-        cv, cpv, pv = view(coeff, :, k), view(coeff_prev, :, k), view(proj, :, k)
+        n = length(ls)
+
+        # Allocate additional data structures used to fit a model.
+        if kernel isa Nothing
+            cv, cpv, pv = view(coeff, :, k), view(coeff_prev, :, k), view(proj, :, k)
+        else
+            cv, cpv, pv = similar(ds, n+intercept), similar(ds, n+intercept), similar(ds, n+intercept)
+        end
+
         idx, BinarySVMProblem(ls, ds, pl, cv, cpv, pv; kernel=kernel, intercept=intercept, negative_label=nl)
     end
 
@@ -386,8 +400,7 @@ function __construct_svms__(::OVO, nsvms, labels, data, coeff, coeff_prev, proj,
     return svm, subset
 end
 
-function __construct_svms__(::OVR, nsvms, labels, data, coeff, coeff_prev, proj, intercept, kernel, nl)
-    lm = labelmap(labels)
+function __construct_svms__(::OVR, lm, nsvms, labels, data, coeff, coeff_prev, proj, intercept, kernel, nl)
     ul = sort!(collect(keys(lm)))
     idx = collect(eachindex(labels))
     ls, ds = labels, data
@@ -417,10 +430,11 @@ function MultiSVMProblem(labels, data, coeff, coeff_prev, proj;
     c = nlabel(unique_labels)
     T = eltype(data)
     encoding = LabelEnc.NativeLabels(unique_labels)
+    lm = labelmap(labels)
 
     # Construct binary classifiers to handle multiclass problem.
     nsvms = determine_number_svms(strategy, c)
-    svm, subset = __construct_svms__(strategy, nsvms, labels, data, coeff, coeff_prev, proj, intercept, kernel, negative_label)
+    svm, subset = __construct_svms__(strategy, lm, nsvms, labels, data, coeff, coeff_prev, proj, intercept, kernel, negative_label)
 
     # Allocate array to handle voting by binary classifiers.
     vote = zeros(Int, c)
@@ -468,6 +482,143 @@ labeltype(::MultiSVMProblem{T,S}) where {T,S} = S
 Returns the number of samples, number of features, and number of categories, respectively.
 """
 probdims(problem::MultiSVMProblem) = (problem.n, problem.p, problem.c)
+
+"""
+Return the data matrix used to fit the SVM.
+"""
+get_problem_data(problem::MultiSVMProblem) = problem.data
+
+"""
+    change_data(problem::BinarySVMProblem, labels::AbstractVector, data)
+
+Create a new `BinarySVMProblem` instance from the labeled dataset `(label, data)` using the vertex encoding from the reference `problem`.
+"""
+function change_data(problem::MultiSVMProblem, labels, data)
+    # Inherit properties from original problem
+    @unpack c, kernel, intercept, strategy, encoding = problem
+    nsvms = length(problem.svm)
+    T = floattype(problem)
+    lm = labelmap(labels)
+
+    # Make sure label map accounts for every category in original problem
+    unique_labels = label(problem.labels)
+    for l in unique_labels
+        if !haskey(lm, l)
+            lm[l] = Int[]
+        end
+    end
+
+    # Infer problem information from data.    
+    has_intercept = all(isequal(1), data[:,end])
+    n, p = length(labels), has_intercept ? size(data, 2)-1 : size(data, 2)
+
+    # Allocate additional data structures used to fit a model.
+    coeff = kernel isa Nothing ? similar(data, p+intercept, nsvms) : similar(data, n+intercept, nsvms)
+    coeff_prev = similar(coeff)
+    proj = similar(coeff)
+
+    # Construct binary classifiers to handle multiclass problem.
+    svm, subset = __change_svm_data__(strategy, lm, problem, labels, data, coeff, coeff_prev, proj)
+
+    # Allocate array to handle voting by binary classifiers.
+    vote = zeros(Int, c)
+
+    return MultiSVMProblem{T}(
+        n, p, c,
+        svm, labels, data, subset, intercept,
+        kernel, strategy, encoding, vote,
+        coeff, coeff_prev, proj,
+    )
+end
+
+function __change_svm_data__(::OVO, lm, problem, labels, data, coeff, coeff_prev, proj)
+    has_intercept = all(isequal(1), data[:,end])
+    labeled_data = (labels, data)
+
+    # helper function to create an SVM using OVO
+    instantiate_svm = function(old, i)
+        @unpack ovr_encoding = old
+        @unpack intercept, kernel = old
+        T = floattype(old)
+
+        pl, nl = MLDataUtils.poslabel(old), MLDataUtils.neglabel(old)
+        idx = sort!(union(lm[pl], lm[nl]))
+        ls, ds = datasubset(labeled_data, idx, obsdim=1)
+        n, p = length(ls), has_intercept ? size(ds, 2)-1 : size(ds, 2)
+
+        # Enforce an encoding using OneVsRest.
+        margin_encoding = LabelEnc.MarginBased(T)
+        y = similar(ds, n)
+        alloc_targets!(y, ls, margin_encoding, ovr_encoding)
+
+        # Create design matrices.
+        X, K = create_X_and_K(kernel, ds, intercept)
+
+        # Allocate additional data structures used to fit a model.
+        if kernel isa Nothing
+            cv, cpv, pv = view(coeff, :, i), view(coeff_prev, :, i), view(proj, :, i)
+        else
+            cv, cpv, pv = similar(ds, n+intercept), similar(ds, n+intercept), similar(ds, n+intercept)
+        end
+        res = (; main=similar(ds, n), dist=similar(cv))
+        grad = similar(cv)
+
+        svm = BinarySVMProblem{T}(n, p,
+            y, X, K, intercept,
+            ls, ovr_encoding,
+            kernel, cv, cpv, pv, res, grad,
+        )
+
+        return idx, svm
+    end
+
+    subset_1, svm_1 = instantiate_svm(problem.svm[1], 1)
+    subset, svms = [subset_1], [svm_1]
+    for i in 2:length(problem.svm)
+        old = problem.svm[i]
+        subset_i, svm_i = instantiate_svm(old, i)
+        push!(subset, subset_i)
+        push!(svms, svm_i)
+    end
+
+    return svms, subset
+end
+
+function __change_svm_data__(::OVR, lm, problem, labels, data, coeff, coeff_prev, proj)
+    # helper function to create an SVM usingn OVR
+    instantiate_svm = function(old, i)
+        @unpack ovr_encoding = old
+        @unpack intercept, kernel = old
+    
+        T = floattype(old)
+        has_intercept = all(isequal(1), data[:,end])
+        n, p = length(labels), has_intercept ? size(data, 2)-1 : size(data, 2)
+        
+        # Enforce an encoding using OneVsRest.
+        margin_encoding = LabelEnc.MarginBased(T)
+        y = similar(data, n)
+        alloc_targets!(y, labels, margin_encoding, ovr_encoding)
+
+        # Create design matrices.
+        X, K = create_X_and_K(kernel, data, intercept)
+
+        # Allocate additional data structures used to fit a model.
+        cv, cpv, pv = view(coeff, :, i), view(coeff_prev, :, i), view(proj, :, i)
+        res = (; main=similar(data, n), dist=similar(cv))
+        grad = similar(cv)
+
+        return BinarySVMProblem{T}(n, p,
+            y, X, K, intercept,
+            labels, ovr_encoding,
+            kernel, cv, cpv, pv, res, grad,
+        )
+    end
+
+    subset = [idx for _ in eachindex(problem.svm)]
+    svm = [instantiate_svm(svm, i) for (i, svm) in enumerate(problem.svm)]
+
+    return svm, subset
+end
 
 function Base.show(io::IO, problem::MultiSVMProblem)
     n, p, c = probdims(problem)

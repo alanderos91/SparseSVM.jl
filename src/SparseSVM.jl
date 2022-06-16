@@ -102,6 +102,17 @@ abstract type AbstractMMAlg end
 include(joinpath("algorithms", "SD.jl"))
 include(joinpath("algorithms", "MMSVD.jl"))
 
+function __mm_init__(algorithm, problem::MultiSVMProblem, ::Nothing)
+    return [__mm_init__(algorithm, svm, nothing) for svm in problem.svm]
+end
+
+function __mm_init__(algorithm, problem::MultiSVMProblem, extras)
+    for (i, svm) in enumerate(problem.svm)
+        extras[i] = __mm_init__(algorithm, svm, extras[i])
+    end
+    return extras
+end
+
 const DEFAULT_ANNEALING = geometric_progression
 const DEFAULT_CALLBACK = __do_nothing_callback__
 const DEFAULT_SCORE_FUNCTION = prediction_error
@@ -245,6 +256,8 @@ function fit!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, s::Real,
     function __fit__!(k)
         subproblem = problem.svm[k]
         r = SparseSVM.fit!(algorithm, subproblem, s, extras[k], update_extras; kwargs...)
+        __copy_coefficients!__(problem.kernel, problem, subproblem, k)
+
         i, l, o, d, g = r
         total_iter += i
         total_loss += l
@@ -447,6 +460,8 @@ function init!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, λ, extras=no
     function __init__!(k)
         subproblem = problem.svm[k]
         r = SparseSVM.init!(algorithm, subproblem, λ, extras; kwargs...)
+        __copy_coefficients!__(problem.kernel, problem, subproblem, k)
+
         i, l, o, d, g = r
         total_iter += i
         total_loss += l
