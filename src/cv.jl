@@ -38,9 +38,9 @@ Hyperparameter values are specified in `grid`, and data subsets are given as `da
 Additional arguments are propagated to `fit` and `anneal`. See also [`SparseSVM.fit`](@ref) and [`SparseSVM.anneal`](@ref).
 """
 function cv(algorithm::AbstractMMAlg, problem, grid::G, dataset_split::Tuple{S1,S2};
-    lambda::Real=1e-3,
+    lambda::Real=1.0,
     maxiter::Int=10^4,
-    tol::Real=1e-4,
+    tol::Real=DEFAULT_GTOL,
     nfolds::Int=5,
     scoref::Function=DEFAULT_SCORE_FUNCTION,
     cb::Function=DEFAULT_CALLBACK,
