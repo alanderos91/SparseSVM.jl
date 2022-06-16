@@ -264,7 +264,7 @@ function __predict__(::Nothing, problem::BinarySVMProblem, X::AbstractMatrix)
     β = view(proj, 1:p)
     β0 = proj[p+intercept]
     yhat = view(X, :, 1:p) * β
-    intercept && (yhat += β0)
+    intercept && (yhat .+= β0)
     return yhat
 end
 
