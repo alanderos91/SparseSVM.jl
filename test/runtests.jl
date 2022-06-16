@@ -141,7 +141,8 @@ end
             @test SSVM.probdims(prob) == (n, p, 2)
             @test prob.intercept == intercept
             @test all(arr -> length(arr) == p+intercept, (prob.coeff, prob.coeff_prev, prob.proj, prob.grad))
-            @test length(prob.res) == n
+            @test length(prob.res.main) == n
+            @test length(prob.res.dist) == p+intercept
 
             return nothing
         end
@@ -174,7 +175,8 @@ end
             @test SSVM.probdims(prob) == (n, p, 2)
             @test prob.intercept == intercept
             @test all(arr -> length(arr) == n+intercept, (prob.coeff, prob.coeff_prev, prob.proj, prob.grad))
-            @test length(prob.res) == n
+            @test length(prob.res.main) == n
+            @test length(prob.res.dist) == n+intercept
 
             return nothing
         end
