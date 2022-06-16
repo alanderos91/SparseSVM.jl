@@ -167,6 +167,51 @@ function geometric_progression(rho, iter, rho_max, multiplier::Real=1.2)
     return convert(typeof(rho), min(rho_max, rho * multiplier))
 end
 
+function prediction_error(model, train_set, validation_set, test_set)
+    # Extract number of features to make predictions consistent.
+    @unpack p = model
+
+    # Extract data for each set.
+    Tr_Y, Tr_X = train_set
+    V_Y, V_X = validation_set
+    T_Y, T_X = test_set
+
+    # Helper function to make predictions on each subset and evaluate errors.
+    _error = function(model, L, X)
+        # Sanity check: Y and X have the same number of rows.
+        length(L) != size(X, 1) && error("Labels ($(length(L))) not compatible with data X ($(size(X))).")
+
+        # Classify response in vertex space; may use @batch.
+        Lhat = SparseSVM.classify(model, X)
+
+        # Sweep through predictions and tally the mistakes.
+        nincorrect = sum(L .!= Lhat)
+
+        return 100 * nincorrect / length(L)
+    end
+
+    Tr = _error(model, Tr_Y, view(Tr_X, :, 1:p))
+    V = _error(model, V_Y, view(V_X, :, 1:p))
+    T = _error(model, T_Y, view(T_X, :, 1:p))
+
+    return (Tr, V, T)
+end
+
+function set_initial_coefficients!(::Nothing, train_coeff, coeff, idx)
+    copyto!(train_coeff, coeff)
+end
+
+function set_initial_coefficients!(::Kernel, train_coeff, coeff, idx)
+    for (i, idx_i) in enumerate(idx)
+        train_coeff[i] .= coeff[idx_i]
+    end
+end
+
+function set_initial_coefficients!(train_problem::BinarySVMProblem, problem::BinarySVMProblem, idx)
+    set_initial_coefficients!(train_problem.kernel, train_problem.coeff, problem.coeff, idx)
+    set_initial_coefficients!(train_problem.kernel, train_problem.coeff_prev, problem.coeff_prev, idx)
+end
+
 """
 Placeholder for callbacks in main functions.
 """

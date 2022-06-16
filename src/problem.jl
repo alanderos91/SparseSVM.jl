@@ -188,6 +188,42 @@ Return the label associated with the -1 target. Note that this label may be arbi
 """
 MLDataUtils.neglabel(problem::BinarySVMProblem) = neglabel(problem.ovr_encoding)
 
+"""
+    change_data(problem::BinarySVMProblem, labels::AbstractVector, data)
+
+Create a new `BinarySVMProblem` instance from the labeled dataset `(label, data)` using the vertex encoding from the reference `problem`.
+"""
+function change_data(problem::BinarySVMProblem, labels, data)
+    @unpack ovr_encoding = problem
+    @unpack intercept, kernel = problem
+
+    T = floattype(problem)
+    has_intercept = all(isequal(1), data[:,end])
+    n, p = length(labels), has_intercept ? size(data, 2)-1 : size(data, 2)
+
+    # Enforce an encoding using OneVsRest.
+    margin_encoding = LabelEnc.MarginBased(T)
+    y = similar(data, n)
+    alloc_targets!(y, labels, margin_encoding, ovr_encoding)
+
+    # Create design matrices.
+    X, K = create_X_and_K(kernel, data, intercept)
+
+    # Allocate additional data structures used to fit a model.
+    coeff = kernel isa Nothing ? similar(data, p+intercept) : similar(data, n+intercept)
+    coeff_prev = similar(coeff)
+    proj = similar(coeff)
+    res = (; main=similar(data, n), dist=similar(coeff))
+    grad = similar(coeff)
+
+    return BinarySVMProblem{T}(n, p,
+        y, X, K, intercept,
+        labels, ovr_encoding,
+        kernel, coeff, coeff_prev,
+        proj, res, grad,
+    )
+end
+
 function Base.show(io::IO, problem::BinarySVMProblem)
     n, p, _ = probdims(problem)
     T = floattype(problem)

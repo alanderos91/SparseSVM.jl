@@ -2,9 +2,10 @@ module SparseSVM
 using DataFrames: copy, copyto!
 using DataDeps, CSV, DataFrames, CodecZlib
 using MLDataUtils
-using KernelFunctions, LinearAlgebra, Random, Statistics, StatsBase
+using KernelFunctions, LinearAlgebra
+using Random, Statistics, StatsBase, StableRNGs
 using Polyester, Parameters
-using Printf
+using Printf, ProgressMeter
 
 import Base: show
 import MLDataUtils: poslabel, neglabel, classify
@@ -103,7 +104,7 @@ include(joinpath("algorithms", "MMSVD.jl"))
 
 const DEFAULT_ANNEALING = geometric_progression
 const DEFAULT_CALLBACK = __do_nothing_callback__
-# const DEFAULT_SCORE_FUNCTION = prediction_error
+const DEFAULT_SCORE_FUNCTION = prediction_error
 
 const DEFAULT_GTOL = 1e-3
 const DEFAULT_DTOL = 1e-3
@@ -466,6 +467,8 @@ function init!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, λ, extras=no
 
     return (; total=total, result=results)
 end
+
+include("cv.jl")
 
 export MultiClassStrategy, OVO, OVR
 export BinarySVMProblem, MultiSVMProblem
