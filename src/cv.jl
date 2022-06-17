@@ -59,7 +59,7 @@ function cv(algorithm::AbstractMMAlg, problem, grid::G, dataset_split::Tuple{S1,
 
     # Run cross-validation.
     if show_progress
-        progress_bar = Progress(nfolds * ns, 1, "Running CV w/ $(algorithm)... ")
+        progress_bar = Progress(nfolds * ns, 1, "Running CV w/ $(algorithm)... "; offset=3)
     end
 
     for (k, fold) in enumerate(kfolds(cv_set, k=nfolds, obsdim=1))
@@ -106,7 +106,7 @@ function cv(algorithm::AbstractMMAlg, problem, grid::G, dataset_split::Tuple{S1,
                 )
             end
             copyto!(train_problem.coeff, train_problem.proj)
-            copy_to_buffer!(train_problem)
+            # copy_to_buffer!(train_problem)
 
             # Evaluate the solution.
             r = scoref(train_problem, (train_Y, train_X), (val_Y, val_X), (test_Y, test_X))
@@ -142,22 +142,25 @@ function repeated_cv(algorithm::AbstractMMAlg, problem, grid::G, dataset_split::
     cv_set, test_set = dataset_split
 
     if show_progress
-        progress_bar = Progress(nreplicates, 1, "Running CV w/ $(algorithm)... ")
+        progress_bar = Progress(nreplicates, 1, "Repeated CV... ")
     end
 
     # Replicate CV procedure several times.
-    replicate = NamedTuple[]
-    for r in 1:nreplicates
+    keys = (:train,:validation,:test,:time)
+    types = NTuple{4,Vector{Vector{Float64}}}
+    replicate = Vector{NamedTuple{keys,types}}(undef, nreplicates)
+
+    for rep in 1:nreplicates
         # Shuffle cross-validation data.
         cv_shuffled = shuffleobs(cv_set, obsdim=1, rng=rng)
 
         # Run k-fold cross-validation and store results.
-        result = SparseSVM.cv(algorithm, problem, grid, (cv_shuffled, test_set); show_progress=false, kwargs...)
-        push!(replicate, result)
+        replicate[rep] = SparseSVM.cv(algorithm, problem, grid, (cv_shuffled, test_set);
+            show_progress=show_progress, kwargs...)
 
         # Update the progress bar.
         if show_progress
-            next!(progress_bar, showvalues=[(:replicate, r),])
+            next!(progress_bar, showvalues=[(:replicate, rep),])
         end
     end
 
