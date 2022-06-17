@@ -52,7 +52,7 @@ function __mm_iterate__(::SD, problem::BinarySVMProblem, ρ, k, extras)
     mul!(X∇g, X, ∇g)
     C1 = dot(∇g, ∇g)
     C2 = dot(X∇g, X∇g)
-    t = ifelse(iszero(C1) && iszero(C2), 0.0, C1 / (a²*C2 + b²*C1))
+    t = ifelse(iszero(C1) && iszero(C2), zero(T), C1 / (a²*C2 + b²*C1))
 
     # Move in the direction of steepest descent.
     axpy!(-t, ∇g, β)
