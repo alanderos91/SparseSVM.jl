@@ -7,8 +7,9 @@ using Random, Statistics, StatsBase, StableRNGs
 using Polyester, Parameters
 using Printf, ProgressMeter
 
-import Base: show
+import Base: show, getproperty
 import MLDataUtils: poslabel, neglabel, classify
+import StatsBase: fit, transform!, reconstruct!
 import CUDA
 
 ##### DATA #####
@@ -484,9 +485,11 @@ function init!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, λ, extras=no
 end
 
 include("cv.jl")
+include("transform.jl")
 
 export MultiClassStrategy, OVO, OVR
 export BinarySVMProblem, MultiSVMProblem
 export MMSVD, SD
+export ZScoreTransform, NormalizationTransform
 
 end # end module
