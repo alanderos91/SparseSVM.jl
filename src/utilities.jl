@@ -41,7 +41,7 @@ end
 """
 Evaluate the gradiant of the regression problem. Assumes residuals have been evaluated.
 """
-function __evaluate_gradient__(problem, ρ, extras)
+function __evaluate_gradient__(problem, rho, extras)
     @unpack grad, res = problem
     ∇g, r, q = grad, res.main, res.dist
     X = get_design_matrix(problem)
@@ -49,14 +49,14 @@ function __evaluate_gradient__(problem, ρ, extras)
     n, _, _ = probdims(problem)
 
     # ∇gᵨ(β ∣ βₘ)ⱼ = -[aXᵀ bI] * [rₘ, qₘ] = -a*Xᵀrₘ - b*qₘ
-    a, b = convert(T, 1 / sqrt(n)), convert(T, ρ)
+    a, b = convert(T, 1 / sqrt(n)), convert(T, rho)
     mul!(∇g, X', r)
     axpby!(-b, q, -a, ∇g)
 
     return nothing
 end
 
-function __evaluate_reg_gradient__(problem, λ, extras)
+function __evaluate_reg_gradient__(problem, lambda, extras)
     @unpack coeff, res, grad = problem
     ∇g, r, β = grad, res.main, coeff
     X = get_design_matrix(problem)
@@ -64,7 +64,7 @@ function __evaluate_reg_gradient__(problem, λ, extras)
     n, _, _ = probdims(problem)
 
     # ∇gᵨ(β ∣ βₘ)ⱼ = -a*Xᵀrₘ + b*β
-    a, b = convert(T, 1 / sqrt(n)), convert(T, λ)
+    a, b = convert(T, 1 / sqrt(n)), convert(T, lambda)
     mul!(∇g, X', r)
     axpby!(b, β, -a, ∇g)
 
@@ -75,33 +75,33 @@ end
 Evaluate the penalized least squares criterion. Also updates the gradient.
 This assumes that projections have been handled externally.
 """
-function __evaluate_objective__(problem, ρ, extras)
+function __evaluate_objective__(problem, rho, extras)
     @unpack res, grad = problem
     r, q, ∇g = res.main, res.dist, grad
 
     __evaluate_residuals__(problem, extras, true, true)
-    __evaluate_gradient__(problem, ρ, extras)
+    __evaluate_gradient__(problem, rho, extras)
 
     loss = dot(r, r) # 1/n * ∑ᵢ (zᵢ - X*β)²
     dist = dot(q, q) # ∑ⱼ (P(βₘ) - β)²
     gradsq = dot(∇g, ∇g)
-    obj = 1//2 * (loss + ρ * dist)
+    obj = 1//2 * (loss + rho * dist)
 
     return IterationResult(loss, obj, dist, gradsq)
 end
 
-function __evaluate_reg_objective__(problem, λ, extras)
+function __evaluate_reg_objective__(problem, lambda, extras)
     @unpack coeff, res, grad = problem
     β, r, ∇g = coeff, res.main, grad
     T = floattype(problem)
 
     __evaluate_residuals__(problem, extras, true, false)
-    __evaluate_reg_gradient__(problem, λ, extras)
+    __evaluate_reg_gradient__(problem, lambda, extras)
 
     loss = dot(r, r) # 1/n * ∑ᵢ (zᵢ - X*β)²
     gradsq = dot(∇g, ∇g)
     penalty = dot(β, β)
-    objective = 1//2 * (loss + λ * penalty)
+    objective = 1//2 * (loss + lambda * penalty)
 
     return IterationResult(loss, objective, 0.0, gradsq)
 end

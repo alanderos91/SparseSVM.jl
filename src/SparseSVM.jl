@@ -146,7 +146,7 @@ end
 Same as `fit(algorithm, problem, s)`, but with preallocated data structures in `extras`.
 
 !!! Note
-    The caller should specify whether to update data structures depending on `s` and `ρ` using `update_extras[1]` and `update_extras[2]`, respectively.
+    The caller should specify whether to update data structures depending on `s` and `rho` using `update_extras[1]` and `update_extras[2]`, respectively.
 
     Convergence is determined based on the rule `dist < dtol || abs(dist - old) < rtol * (1 + old)`, where `dist` is the distance and `dtol` and `rtol` are tolerance parameters.
 
@@ -155,12 +155,12 @@ Same as `fit(algorithm, problem, s)`, but with preallocated data structures in `
 
 # Keyword Arguments
 
-- `nouter`: The number of outer iterations; i.e. the maximum number of `ρ` values to use in annealing (default=`100`).
+- `nouter`: The number of outer iterations; i.e. the maximum number of `rho` values to use in annealing (default=`100`).
 - `dtol`: An absolute tolerance parameter for the squared distance (default=`1e-6`).
 - `rtol`: A relative tolerance parameter for the squared distance (default=`1e-6`).
-- `rho_init`: The initial value for `ρ` (default=1.0).
-- `rho_max`: The maximum value for `ρ` (default=1e8).
-- `rhof`: A function `rhof(ρ, iter, rho_max)` used to determine the next value for `ρ` in the annealing sequence. The default multiplies `ρ` by `1.2`.
+- `rho_init`: The initial value for `rho` (default=1.0).
+- `rho_max`: The maximum value for `rho` (default=1e8).
+- `rhof`: A function `rhof(rho, iter, rho_max)` used to determine the next value for `rho` in the annealing sequence. The default multiplies `rho` by `1.2`.
 - `verbose`: Print convergence information (default=`false`).
 - `cb`: A callback function for extending functionality.
 
@@ -190,29 +190,28 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, s::Real,
     # Fix model size(s).
     k = sparsity_to_k(problem, s)
 
-    # Initialize ρ and iteration count.
-    ρ, iters = rho_init, 0
+    # Initialize rho and iteration count.
+    rho, iters = rho_init, 0
 
     # Update data structures due to hyperparameters.
-    update_extras[1] && __mm_update_sparsity__(algorithm, problem, ρ, k, extras)
-    update_extras[2] && __mm_update_rho__(algorithm, problem, ρ, k, extras)
+    update_extras[1] && __mm_update_sparsity__(algorithm, problem, rho, k, extras)
+    update_extras[2] && __mm_update_rho__(algorithm, problem, rho, k, extras)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
     apply_projection(projection, problem, k)
-    init_result = __evaluate_objective__(problem, ρ, extras)
+    init_result = __evaluate_objective__(problem, rho, extras)
     result = SubproblemResult(0, init_result)
-    cb(0, problem, ρ, k, result)
+    cb(0, problem, rho, k, result)
     old = sqrt(result.distance)
 
     for iter in 1:nouter
         # Solve minimization problem for fixed rho.
-        verbose && print("\n",iter,"  ρ = ",ρ)
-        result = SparseSVM.anneal!(algorithm, problem, ρ, s, extras, (false,true,); verbose=verbose, cb=cb, kwargs...)
+        result = SparseSVM.anneal!(algorithm, problem, rho, s, extras, (false,true,); verbose=verbose, cb=cb, kwargs...)
 
         # Update total iteration count.
         iters += result.iters
 
-        cb(iter, problem, ρ, k, result)
+        cb(iter, problem, rho, k, result)
 
         # Check for convergence to constrained solution.
         dist = sqrt(result.distance)
@@ -223,12 +222,12 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, s::Real,
         end
                 
         # Update according to annealing schedule.
-        ρ = ifelse(iter < nouter, rhof(ρ, iter, rho_max), ρ)
+        rho = ifelse(iter < nouter, rhof(rho, iter, rho_max), rho)
     end
     
     # Project solution to the constraint set.
     apply_projection(projection, problem, k)
-    loss, obj, dist, gradsq = __evaluate_objective__(problem, ρ, extras)
+    loss, obj, dist, gradsq = __evaluate_objective__(problem, rho, extras)
 
     if verbose
         print("\n\niters = ", iters)
@@ -281,22 +280,22 @@ function fit!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, s::Real,
 end
 
 """
-    anneal(algorithm, problem, ρ, s; kwargs...)
+    anneal(algorithm, problem, rho, s; kwargs...)
 
-Solve the `ρ`-penalized optimization problem at sparsity level `s`.
+Solve the `rho`-penalized optimization problem at sparsity level `s`.
 """
-function anneal(algorithm::AbstractMMAlg, problem::BinarySVMProblem, ρ::Real, s::Real; kwargs...)
+function anneal(algorithm::AbstractMMAlg, problem::BinarySVMProblem, rho::Real, s::Real; kwargs...)
     extras = __mm_init__(algorithm, problem, nothing)
-    SparseSVM.anneal!(algorithm, problem, ρ, s, extras, (true,true,); kwargs...)
+    SparseSVM.anneal!(algorithm, problem, rho, s, extras, (true,true,); kwargs...)
 end
 
 """
-    anneal!(algorithm, problem, ρ, s, [extras], [update_extras]; kwargs...)
+    anneal!(algorithm, problem, rho, s, [extras], [update_extras]; kwargs...)
 
-Same as `anneal(algorithm, problem, ρ, s)`, but with preallocated data structures in `extras`.
+Same as `anneal(algorithm, problem, rho, s)`, but with preallocated data structures in `extras`.
 
 !!! Note
-    The caller should specify whether to update data structures depending on `s` and `ρ` using `update_extras[1]` and `update_extras[2]`, respectively.
+    The caller should specify whether to update data structures depending on `s` and `rho` using `update_extras[1]` and `update_extras[2]`, respectively.
 
     Convergence is determined based on the rule `grad < gtol`, where `grad` is the Euclidean norm of the gradient and `gtol` is a tolerance parameter.
 
@@ -311,7 +310,7 @@ Same as `anneal(algorithm, problem, ρ, s)`, but with preallocated data structur
 - `verbose`: Print convergence information (default=`false`).
 - `cb`: A callback function for extending functionality.
 """
-function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, ρ::Real, s::Real,
+function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, rho::Real, s::Real,
     extras=nothing,
     update_extras::NTuple{2,Bool}=(true,true);
     ninner::Int=10^4,
@@ -334,13 +333,13 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, ρ::Real, 
     k = sparsity_to_k(problem, s)
 
     # Update data structures due to hyperparameters.
-    update_extras[1] && __mm_update_sparsity__(algorithm, problem, ρ, k, extras)
-    update_extras[2] && __mm_update_rho__(algorithm, problem, ρ, k, extras)
+    update_extras[1] && __mm_update_sparsity__(algorithm, problem, rho, k, extras)
+    update_extras[2] && __mm_update_rho__(algorithm, problem, rho, k, extras)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
     apply_projection(projection, problem, k)
-    result = __evaluate_objective__(problem, ρ, extras)
-    cb(0, problem, ρ, k, result)
+    result = __evaluate_objective__(problem, rho, extras)
+    cb(0, problem, rho, k, result)
     old = result.objective
 
     if sqrt(result.gradient) < gtol
@@ -353,21 +352,21 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, ρ::Real, 
     # Initialize iteration counts.
     iters = 0
     nesterov_iter = 1
-    verbose && @printf("\n%-5s\t%-8s\t%-8s\t%-8s\t%-8s", "iter.", "loss", "objective", "distance", "|gradient|")
+    verbose && @printf("\n%-5s\t%-8s\t%-8s\t%-8s\t%-8s\t%-8s", "iter.", "loss", "objective", "distance", "|gradient|", "rho")
     for iter in 1:ninner
         iters += 1
 
         # Apply the algorithm map to minimize the quadratic surrogate.
-        __mm_iterate__(algorithm, problem, ρ, k, extras)
+        __mm_iterate__(algorithm, problem, rho, k, extras)
 
         # Update loss, objective, distance, and gradient.
         apply_projection(projection, problem, k)
-        result = __evaluate_objective__(problem, ρ, extras)
+        result = __evaluate_objective__(problem, rho, extras)
 
-        cb(iter, problem, ρ, k, result)
+        cb(iter, problem, rho, k, result)
 
         if verbose
-            @printf("\n%4d\t%4.3e\t%4.3e\t%4.3e\t%4.3e", iter, result.loss, result.objective, sqrt(result.distance), sqrt(result.gradient))
+            @printf("\n%4d\t%4.3e\t%4.3e\t%4.3e\t%4.3e\t%4.3e", iter, result.loss, result.objective, sqrt(result.distance), sqrt(result.gradient), rho)
         end
 
         # Assess convergence.
@@ -387,11 +386,11 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, ρ::Real, 
 end
 
 """
-```init!(algorithm, problem, ϵ, λ, [_extras_]; [maxiter=10^3], [gtol=1e-6], [nesterov_threshold=10], [verbose=false])```
+```init!(algorithm, problem, lambda, [_extras_]; [maxiter=10^3], [gtol=1e-6], [nesterov_threshold=10], [verbose=false])```
 
-Initialize a `problem` with its `λ`-regularized solution.
+Initialize a `problem` with its `lambda`-regularized solution.
 """
-function init!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, λ, _extras_=nothing;
+function init!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda, _extras_=nothing;
     maxiter::Int=10^3,
     gtol::Real=DEFAULT_GTOL,
     nesterov_threshold::Int=10,
@@ -404,13 +403,13 @@ function init!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, λ, _extras_
     @unpack coeff, coeff_prev, proj = problem
 
     # Update data structures due to hyperparameters.
-    __mm_update_lambda__(algorithm, problem, λ, extras)
+    __mm_update_lambda__(algorithm, problem, lambda, extras)
 
     # Initialize coefficients.
     copyto!(coeff_prev, coeff)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
-    result = __evaluate_reg_objective__(problem, λ, extras)
+    result = __evaluate_reg_objective__(problem, lambda, extras)
     old = result.objective
 
     if sqrt(result.gradient) < gtol
@@ -425,10 +424,10 @@ function init!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, λ, _extras_
         iters += 1
 
         # Apply the algorithm map to minimize the quadratic surrogate.
-        __reg_iterate__(algorithm, problem, λ, extras)
+        __reg_iterate__(algorithm, problem, lambda, extras)
 
         # Update loss, objective, and gradient.
-        result = __evaluate_reg_objective__(problem, λ, extras)
+        result = __evaluate_reg_objective__(problem, lambda, extras)
 
         if verbose
             @printf("\n%4d\t%4.3e\t%4.3e\t%4.3e", iter, result.loss, result.objective, sqrt(result.gradient))
@@ -453,14 +452,14 @@ function init!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, λ, _extras_
     return SubproblemResult(iters, result)
 end
 
-function init!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, λ, extras=nothing; kwargs...)
+function init!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda, extras=nothing; kwargs...)
     n = length(problem.svm)
     total_iter, total_loss, total_objv, total_dist, total_grad = 0, 0.0, 0.0, 0.0, 0.0
 
     # Create closure to fit a particular SVM.
     function __init__!(k)
         subproblem = problem.svm[k]
-        r = SparseSVM.init!(algorithm, subproblem, λ, extras; kwargs...)
+        r = SparseSVM.init!(algorithm, subproblem, lambda, extras; kwargs...)
         __copy_coefficients!__(problem.kernel, problem, subproblem, k)
 
         i, l, o, d, g = r

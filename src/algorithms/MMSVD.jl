@@ -41,20 +41,20 @@ function __mm_init__(::MMSVD, problem::BinarySVMProblem, extras)
 end
 
 # Update data structures due to change in model size, k.
-__mm_update_sparsity__(::MMSVD, problem::BinarySVMProblem, ρ, k, extras) = nothing
+__mm_update_sparsity__(::MMSVD, problem::BinarySVMProblem, rho, k, extras) = nothing
 
-# Update data structures due to changing ρ.
-__mm_update_rho__(::MMSVD, problem::BinarySVMProblem, ρ, k, extras) = update_diagonal(problem, ρ, extras)
-# __mm_update_rho__(::MMSVD, problem::BinarySVMProblem, ρ, k, extras) = update_matrices(problem, ρ, extras)
+# Update data structures due to changing rho.
+__mm_update_rho__(::MMSVD, problem::BinarySVMProblem, rho, k, extras) = update_diagonal(problem, rho, extras)
+# __mm_update_rho__(::MMSVD, problem::BinarySVMProblem, rho, k, extras) = update_matrices(problem, rho, extras)
 
-# Update data structures due to changing λ. 
-__mm_update_lambda__(::MMSVD, problem::BinarySVMProblem, λ, extras) = update_diagonal(problem, λ, extras)
+# Update data structures due to changing lambda. 
+__mm_update_lambda__(::MMSVD, problem::BinarySVMProblem, lambda, extras) = update_diagonal(problem, lambda, extras)
 
-function update_diagonal(problem::BinarySVMProblem, λ, extras)
+function update_diagonal(problem::BinarySVMProblem, lambda, extras)
     @unpack s, Ψ = extras
     n, _, _ = probdims(problem)
     T = floattype(problem)
-    a², b² = convert(T, 1/n), convert(T, λ)
+    a², b² = convert(T, 1/n), convert(T, lambda)
 
     # Update the diagonal matrix Ψ = (a² Σ²) / (a² Σ² + b² I).
     __update_diagonal__(Ψ.diag, s, a², b²)
@@ -69,17 +69,8 @@ function __update_diagonal__(diag, s, a², b²)
     end
 end
 
-# function update_matrices(problem::BinarySVMProblem, λ, extras)
-#     @unpack Ψ, V, VΨVt = extras
-
-#     update_diagonal(problem, λ, extras)
-#     VΨVt .= V * Ψ * V'
-
-#     return nothing
-# end
-
 # Apply one update.
-function __mm_iterate__(::MMSVD, problem::BinarySVMProblem, ρ, k, extras)
+function __mm_iterate__(::MMSVD, problem::BinarySVMProblem, rho, k, extras)
     @unpack intercept, coeff, proj = problem
     @unpack buffer, projection = extras
     @unpack z, Ψ, U, s, V = extras
@@ -102,29 +93,8 @@ function __mm_iterate__(::MMSVD, problem::BinarySVMProblem, ρ, k, extras)
     return nothing
 end
 
-# function __mm_iterate__(::MMSVD, problem::BinarySVMProblem, ρ, k, extras)
-#     @unpack coeff, proj = problem
-#     @unpack z, VΨVt, projection = extras
-#     β, pₘ = coeff, proj
-#     X = get_design_matrix(problem)
-#     T = floattype(problem)
-#     n, _, _ = probdims(problem)
-
-#     # need to compute Z via residuals...
-#     apply_projection(projection, problem, k)
-#     __evaluate_residuals__(problem, extras, true, false)
-
-#     # Update parameters: β = 1/ρ * (I - VΨVᵀ) * (1/n Xᵀ zₘ + ρ P(βₘ)) 
-#     a, b = convert(T, 1/n), convert(T, ρ)
-#     mul!(pₘ, X', z, a, ρ)
-#     copyto!(β, pₘ)
-#     mul!(β, VΨVt, pₘ, -1/b, 1/b)
-
-#     return nothing
-# end
-
 # Apply one update in reguarlized problem.
-function __reg_iterate__(::MMSVD, problem::BinarySVMProblem, λ, extras)
+function __reg_iterate__(::MMSVD, problem::BinarySVMProblem, lambda, extras)
     @unpack intercept, coeff = problem
     @unpack buffer = extras
     @unpack z, Ψ, U, s, V = extras

@@ -25,16 +25,16 @@ function __mm_init__(::SD, problem::BinarySVMProblem, extras)
 end
 
 # Update data structures due to change in model subsets, k.
-__mm_update_sparsity__(::SD, problem::BinarySVMProblem, ρ, k, extras) = nothing
+__mm_update_sparsity__(::SD, problem::BinarySVMProblem, rho, k, extras) = nothing
 
-# Update data structures due to changing ρ.
-__mm_update_rho__(::SD, problem::BinarySVMProblem, ρ, k, extras) = nothing
+# Update data structures due to changing rho.
+__mm_update_rho__(::SD, problem::BinarySVMProblem, rho, k, extras) = nothing
 
-# Update data structures due to changing λ.
-__mm_update_lambda__(::SD, problem::BinarySVMProblem, λ, extras) = nothing
+# Update data structures due to changing lambda.
+__mm_update_lambda__(::SD, problem::BinarySVMProblem, lambda, extras) = nothing
 
 # Apply one update.
-function __mm_iterate__(::SD, problem::BinarySVMProblem, ρ, k, extras)
+function __mm_iterate__(::SD, problem::BinarySVMProblem, rho, k, extras)
     @unpack coeff, grad, res = problem
     @unpack projection = extras
     β, ∇g, X∇g = coeff, grad, res.main
@@ -45,10 +45,10 @@ function __mm_iterate__(::SD, problem::BinarySVMProblem, ρ, k, extras)
     # Project and then evaluate gradient.
     apply_projection(projection, problem, k)
     __evaluate_residuals__(problem, extras, true, true)
-    __evaluate_gradient__(problem, ρ, extras)
+    __evaluate_gradient__(problem, rho, extras)
 
     # Find optimal step size
-    a², b² = convert(T, 1/n), convert(T, ρ)
+    a², b² = convert(T, 1/n), convert(T, rho)
     mul!(X∇g, X, ∇g)
     C1 = dot(∇g, ∇g)
     C2 = dot(X∇g, X∇g)
@@ -61,7 +61,7 @@ function __mm_iterate__(::SD, problem::BinarySVMProblem, ρ, k, extras)
 end
 
 # Apply one update in regularized problem.
-function __reg_iterate__(::SD, problem::BinarySVMProblem, λ, extras)
+function __reg_iterate__(::SD, problem::BinarySVMProblem, lambda, extras)
     @unpack coeff, grad, res = problem
     β, ∇g, X∇g = coeff, grad, res.main
     X = get_design_matrix(problem)
@@ -70,10 +70,10 @@ function __reg_iterate__(::SD, problem::BinarySVMProblem, λ, extras)
 
     # Evaluate the gradient using residuals.
     __evaluate_residuals__(problem, extras, true, false)
-    __evaluate_reg_gradient__(problem, λ, extras)
+    __evaluate_reg_gradient__(problem, lambda, extras)
 
     # Find optimal step size
-    a², b² = convert(T, 1/n), convert(T, λ)
+    a², b² = convert(T, 1/n), convert(T, lambda)
     mul!(X∇g, X, ∇g)
     C1 = dot(∇g, ∇g)
     C2 = dot(X∇g, X∇g)

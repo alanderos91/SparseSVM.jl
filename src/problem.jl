@@ -276,14 +276,14 @@ end
 function __predict__(::Kernel, problem::BinarySVMProblem, _x::AbstractVector)
     @unpack n, p, intercept = problem
     x = view(_x, 1:p)
-    κ = problem.kernel
+    kappa = problem.kernel
     α = view(problem.proj, 1:n)
     α0 = problem.proj[n+intercept]
     X = problem.X
     y = problem.y
     yhat = zero(floattype(problem))
     for (j, xⱼ) in enumerate(eachrow(X))
-        yhat += α[j] * y[j] * κ(x, xⱼ)
+        yhat += α[j] * y[j] * kappa(x, xⱼ)
     end
     intercept && (yhat += α0)
     return yhat
