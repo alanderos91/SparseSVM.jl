@@ -51,6 +51,12 @@ git-tree-sha1 = "d7dc30474e73173a990eca86af76cae8790fa9f2"
 uuid = "b0d46f97-bff5-4637-a19a-dd75974142cd"
 version = "0.1.2"
 
+[[ArraysOfArrays]]
+deps = ["Adapt", "ChainRulesCore", "Requires", "Statistics", "UnsafeArrays"]
+git-tree-sha1 = "cbc76e824d185fd310cb7f6af02c566e10500e68"
+uuid = "65a8f2f4-9b39-5baf-92e2-a9cc46fdf018"
+version = "0.5.10"
+
 [[Artifacts]]
 uuid = "56f22d72-fd6d-98f1-02f0-08ddc0907c33"
 
@@ -1297,6 +1303,11 @@ deps = ["REPL"]
 git-tree-sha1 = "53915e50200959667e78a92a418594b428dffddf"
 uuid = "1cfade01-22cf-5700-b092-accc4b62d6e1"
 version = "0.4.1"
+
+[[UnsafeArrays]]
+git-tree-sha1 = "038cd6ae292c857e6f91be52b81236607627aacd"
+uuid = "c4a57d5a-5b31-53a6-b365-19f8c011fbd6"
+version = "1.0.3"
 
 [[Unzip]]
 git-tree-sha1 = "34db80951901073501137bdbc3d5a8e7bbd06670"

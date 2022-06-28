@@ -1,4 +1,5 @@
 module SparseSVM
+using ArraysOfArrays: VectorOfVectors
 using DataFrames: copy, copyto!
 using DataDeps, CSV, DataFrames, CodecZlib
 using MLDataUtils
@@ -116,7 +117,7 @@ end
 
 const DEFAULT_ANNEALING = geometric_progression
 const DEFAULT_CALLBACK = __do_nothing_callback__
-const DEFAULT_SCORE_FUNCTION = prediction_error
+const DEFAULT_SCORE_FUNCTION = prediction_errors
 
 const DEFAULT_GTOL = 1e-3
 const DEFAULT_DTOL = 1e-3
@@ -190,6 +191,9 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, s::Real,
     # Fix model size(s).
     k = sparsity_to_k(problem, s)
 
+    # Use previous estimates in case of warm start.
+    copyto!(coeff, coeff_prev)
+
     # Initialize rho and iteration count.
     rho, iters = rho_init, 0
 
@@ -256,7 +260,6 @@ function fit!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, s::Real,
     function __fit__!(k)
         subproblem = problem.svm[k]
         r = SparseSVM.fit!(algorithm, subproblem, s, extras[k], update_extras; kwargs...)
-        __copy_coefficients!__(problem.kernel, problem, subproblem, k)
 
         i, l, o, d, g = r
         total_iter += i
@@ -332,6 +335,9 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, rho::Real,
     # Fix model size(s).
     k = sparsity_to_k(problem, s)
 
+    # Use previous estimates in case of warm start.
+    copyto!(coeff, coeff_prev)
+
     # Update data structures due to hyperparameters.
     update_extras[1] && __mm_update_sparsity__(algorithm, problem, rho, k, extras)
     update_extras[2] && __mm_update_rho__(algorithm, problem, rho, k, extras)
@@ -345,9 +351,6 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, rho::Real,
     if sqrt(result.gradient) < gtol
         return SubproblemResult(0, result)
     end
-
-    # Use previous estimates in case of warm start.
-    copyto!(coeff, coeff_prev)
 
     # Initialize iteration counts.
     iters = 0
@@ -406,7 +409,7 @@ function init!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda, _ext
     __mm_update_lambda__(algorithm, problem, lambda, extras)
 
     # Initialize coefficients.
-    copyto!(coeff_prev, coeff)
+    copyto!(coeff, coeff_prev)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
     result = __evaluate_reg_objective__(problem, lambda, extras)
@@ -460,7 +463,6 @@ function init!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda, extra
     function __init__!(k)
         subproblem = problem.svm[k]
         r = SparseSVM.init!(algorithm, subproblem, lambda, extras; kwargs...)
-        __copy_coefficients!__(problem.kernel, problem, subproblem, k)
 
         i, l, o, d, g = r
         total_iter += i

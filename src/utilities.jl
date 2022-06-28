@@ -167,123 +167,60 @@ function geometric_progression(rho, iter, rho_max, multiplier::Real=1.2)
     return convert(typeof(rho), min(rho_max, rho * multiplier))
 end
 
-function prediction_error(model, train_set, validation_set, test_set)
-    # Extract number of features to make predictions consistent.
-    @unpack p = model
+convert_labels(model::BinarySVMProblem, L) = map(Li -> MLDataUtils.convertlabel(model.ovr_encoding, Li, model.ovr_encoding), L)
+convert_labels(model::MultiSVMProblem, L) = L
 
+function prediction_errors(model, train_set, validation_set, test_set)
     # Extract data for each set.
     Tr_Y, Tr_X = train_set
     V_Y, V_X = validation_set
     T_Y, T_X = test_set
 
     # Helper function to make predictions on each subset and evaluate errors.
-    _error = function(model, L, X)
+    classification_error = function(model, L, X)
         # Sanity check: Y and X have the same number of rows.
         length(L) != size(X, 1) && error("Labels ($(length(L))) not compatible with data X ($(size(X))).")
+
+        # Translate data to the model's encoding.
+        L_translated = convert_labels(model, L)
 
         # Classify response in vertex space; may use @batch.
         Lhat = SparseSVM.classify(model, X)
 
         # Sweep through predictions and tally the mistakes.
-        nincorrect = sum(L .!= Lhat)
+        nincorrect = sum(L_translated .!= Lhat)
 
         return 100 * nincorrect / length(L)
     end
 
-    Tr = _error(model, Tr_Y, view(Tr_X, :, 1:p))
-    V = _error(model, V_Y, view(V_X, :, 1:p))
-    T = _error(model, T_Y, view(T_X, :, 1:p))
+    Tr = classification_error(model, Tr_Y, Tr_X)
+    V = classification_error(model, V_Y, V_X)
+    T = classification_error(model, T_Y, T_X)
 
     return (Tr, V, T)
 end
 
-function set_initial_coefficients!(::Nothing, train_coeff, coeff, idx)
-    copyto!(train_coeff, coeff)
-end
-
-function set_initial_coefficients!(::Kernel, train_coeff, coeff, idx)
-    for (i, idx_i) in enumerate(idx)
-        train_coeff[i] = coeff[idx_i]
+function set_initial_coefficients!(problem::BinarySVMProblem, v::Real)
+    array = problem.coeff_prev
+    idx = if problem.intercept
+        1:length(array)-1
+    else
+        1:length(array)
     end
+    fill!(view(array, idx), v)
 end
 
-function set_initial_coefficients!(train_problem::BinarySVMProblem, problem::BinarySVMProblem, idx)
-    set_initial_coefficients!(train_problem.kernel, train_problem.coeff, problem.coeff, idx)
-    set_initial_coefficients!(train_problem.kernel, train_problem.coeff_prev, problem.coeff_prev, idx)
-    nothing
+function set_initial_coefficients!(problem::MultiSVMProblem, v::Real)
+    foreach(svm -> set_initial_coefficients!(svm, v), problem.svm)
 end
 
-function set_initial_coefficients!(train_problem::MultiSVMProblem, problem::MultiSVMProblem, idxs)
-    for (i, (train_svm, svm, idx)) in enumerate(zip(train_problem.svm, problem.svm, idxs))
-        set_initial_coefficients!(train_svm, svm, idx)
-        __copy_coefficients!__(train_problem.kernel, train_problem, train_svm, i)
-    end
-    nothing
+function set_initial_coefficients_and_intercept!(problem::BinarySVMProblem, v)
+    fill!(problem.coeff_prev, v)
 end
 
-function extract_indices(problem::BinarySVMProblem, labels)
-    intersect(parentindices(problem.labels), parentindices(labels))
+function set_initial_coefficients_and_intercept!(problem::MultiSVMProblem, v::Real)
+    foreach(svm -> set_initial_coefficients_and_intercept!(svm, v), problem.svm)
 end
-
-function extract_indices(problem::MultiSVMProblem, labels)
-    [extract_indices(svm, labels) for svm in problem.svm]
-end
-
-__copy_coefficients!__(::Nothing, problem::MultiSVMProblem, subproblem::BinarySVMProblem, i::Integer) = nothing
-__copy_coefficients!__(::Nothing, subproblem::BinarySVMProblem, problem::MultiSVMProblem, i::Integer) = nothing
-
-function __copy_coefficients!__(::Kernel, problem::MultiSVMProblem, subproblem::BinarySVMProblem, i::Integer)
-    @unpack subset, intercept = problem
-    @unpack coeff, coeff_prev, proj = subproblem
-    idx = subset[i]
-
-    if !(coeff isa SubArray)
-        for field in (:coeff, :coeff_prev, :proj)
-            src = getfield(subproblem, field)
-            dst = getfield(problem, field)
-            nparams = length(idx)
-            dst[idx, i] .= view(src, 1:nparams)
-            if intercept
-                dst[nparams+1,i] = src[nparams+1]
-            end
-        end
-    end
-
-    return nothing
-end
-
-function __copy_coefficients!__(::Kernel, subproblem::BinarySVMProblem, problem::MultiSVMProblem, i::Integer)
-    @unpack subset, intercept = problem
-    @unpack coeff, coeff_prev, proj = subproblem
-    idx = subset[i]
-
-    if !(coeff isa SubArray)
-        for field in (:coeff, :coeff_prev, :proj)
-            src = getfield(problem, field)
-            dst = getfield(subproblem, field)
-            nparams = length(idx)
-            dst[1:nparams] .= view(src, idx, i)
-            if intercept
-                dst[nparams+1] = src[nparams+1,i]
-            end
-        end
-    end
-
-    return nothing
-end
-
-function copy_from_buffer!(problem::MultiSVMProblem)
-    for (i, subproblem) in enumerate(problem.svm)
-        __copy_coefficients!__(problem.kernel, problem, subproblem, i)
-    end
-end
-
-function copy_to_buffer!(problem::MultiSVMProblem)
-    for (i, subproblem) in enumerate(problem.svm)
-        __copy_coefficients!__(problem.kernel, subproblem, problem, i)
-    end
-end
-
 
 """
 Placeholder for callbacks in main functions.

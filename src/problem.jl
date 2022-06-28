@@ -13,15 +13,16 @@ determine_number_svms(::OVR, c) = c
 has_inferrable_encoding(::Type{T}) where T <: Union{Number,AbstractString,Symbol} = true
 has_inferrable_encoding(x) = false
 
-function create_X_and_K(kernel::Kernel, data, intercept)
+function create_X_and_K(kernel::Kernel, y, data, intercept)
     K = kernelmatrix(kernel, data, obsdim=1)
+    rmul!(K, Diagonal(y))
     T = eltype(K)
     intercept && (K = [K ones(T, size(K, 1))])
     X = copy(data)
     return X, K
 end
 
-function create_X_and_K(::Nothing, data, intercept)
+function create_X_and_K(::Nothing, y, data, intercept)
     T = eltype(data)
     X = intercept ? [data ones(T, size(data, 1))] : copy(data)
     return X, nothing
@@ -124,7 +125,7 @@ function BinarySVMProblem(labels, data, positive_label::S, coeff, coeff_prev, pr
     alloc_targets!(y, labels, margin_encoding, ovr_encoding)
 
     # Create design matrices.
-    X, K = create_X_and_K(kernel, data, intercept)
+    X, K = create_X_and_K(kernel, y, data, intercept)
 
     # Allocate additional data structures used to fit a model.
     res = (; main=similar(data, n), dist=similar(coeff))
@@ -212,7 +213,7 @@ function change_data(problem::BinarySVMProblem, labels, data)
     alloc_targets!(y, labels, margin_encoding, ovr_encoding)
 
     # Create design matrices.
-    X, K = create_X_and_K(kernel, data, intercept)
+    X, K = create_X_and_K(kernel, y, data, intercept)
 
     # Allocate additional data structures used to fit a model.
     coeff = kernel isa Nothing ? similar(data, p+intercept) : similar(data, n+intercept)
@@ -380,7 +381,8 @@ function __construct_svms__(::OVO, lm, nsvms, labels, data, coeff, coeff_prev, p
         if kernel isa Nothing
             cv, cpv, pv = view(coeff, :, k), view(coeff_prev, :, k), view(proj, :, k)
         else
-            cv, cpv, pv = similar(ds, n+intercept), similar(ds, n+intercept), similar(ds, n+intercept)
+            foreach(arr -> push!(arr, similar(data, n+intercept)), (coeff, coeff_prev, proj))
+            cv, cpv, pv = coeff[k], coeff_prev[k], proj[k]
         end
 
         idx, BinarySVMProblem(ls, ds, pl, cv, cpv, pv; kernel=kernel, intercept=intercept, negative_label=nl)
@@ -460,9 +462,19 @@ function MultiSVMProblem(labels, data;
 
     # Allocate arrays for coefficients.
     nsvms = determine_number_svms(strategy, c)
-    coeff = kernel isa Nothing ? similar(data, p+intercept, nsvms) : similar(data, n+intercept, nsvms)
-    coeff_prev = similar(coeff)
-    proj = similar(coeff)
+    if strategy isa OVR
+        if kernel isa Nothing
+            coeff = similar(data, p+intercept, nsvms)
+        else
+            coeff = similar(data, n+intercept, nsvms)
+        end
+        coeff_prev = similar(coeff)
+        proj = similar(coeff)
+    else # OVO
+        coeff = VectorOfVectors{eltype(data)}()
+        coeff_prev = VectorOfVectors{eltype(data)}()
+        proj = VectorOfVectors{eltype(data)}()
+    end
 
     return MultiSVMProblem(labels, data, coeff, coeff_prev, proj;
         intercept=intercept, kernel=kernel, strategy=strategy, kwargs...)
@@ -513,9 +525,19 @@ function change_data(problem::MultiSVMProblem, labels, data)
     n, p = length(labels), has_intercept ? size(data, 2)-1 : size(data, 2)
 
     # Allocate additional data structures used to fit a model.
-    coeff = kernel isa Nothing ? similar(data, p+intercept, nsvms) : similar(data, n+intercept, nsvms)
-    coeff_prev = similar(coeff)
-    proj = similar(coeff)
+    if strategy isa OVR
+        if kernel isa Nothing
+            coeff = similar(data, p+intercept, nsvms)
+        else
+            coeff = similar(data, n+intercept, nsvms)
+        end
+        coeff_prev = similar(coeff)
+        proj = similar(coeff)
+    else # OVO
+        coeff = VectorOfVectors{eltype(data)}()
+        coeff_prev = VectorOfVectors{eltype(data)}()
+        proj = VectorOfVectors{eltype(data)}()
+    end
 
     # Construct binary classifiers to handle multiclass problem.
     svm, subset = __change_svm_data__(strategy, lm, problem, labels, data, coeff, coeff_prev, proj)
@@ -552,13 +574,14 @@ function __change_svm_data__(::OVO, lm, problem, labels, data, coeff, coeff_prev
         alloc_targets!(y, ls, margin_encoding, ovr_encoding)
 
         # Create design matrices.
-        X, K = create_X_and_K(kernel, ds, intercept)
+        X, K = create_X_and_K(kernel, y, ds, intercept)
 
         # Allocate additional data structures used to fit a model.
         if kernel isa Nothing
             cv, cpv, pv = view(coeff, :, i), view(coeff_prev, :, i), view(proj, :, i)
         else
-            cv, cpv, pv = similar(ds, n+intercept), similar(ds, n+intercept), similar(ds, n+intercept)
+            foreach(arr -> push!(arr, similar(ds, n+intercept)), (coeff, coeff_prev, proj))
+            cv, cpv, pv = coeff[i], coeff_prev[i], proj[i]
         end
         res = (; main=similar(ds, n), dist=similar(cv))
         grad = similar(cv)
@@ -600,7 +623,7 @@ function __change_svm_data__(::OVR, lm, problem, labels, data, coeff, coeff_prev
         alloc_targets!(y, labels, margin_encoding, ovr_encoding)
 
         # Create design matrices.
-        X, K = create_X_and_K(kernel, data, intercept)
+        X, K = create_X_and_K(kernel, y, data, intercept)
 
         # Allocate additional data structures used to fit a model.
         cv, cpv, pv = view(coeff, :, i), view(coeff_prev, :, i), view(proj, :, i)

@@ -69,7 +69,7 @@ function cv(algorithm::AbstractMMAlg, problem, grid::G, dataset_split::Tuple{S1,
         train_Y, train_X = getobs(train_set, obsdim=1)
         val_Y, val_X = getobs(validation_set, obsdim=1)
         test_Y, test_X = getobs(test_set, obsdim=1)
-        
+
         # Standardize ALL data based on the training set.
         F = StatsBase.fit(ZScoreTransform, train_X, dims=1)
         has_nan = any(isnan, F.scale) || any(isnan, F.mean)
@@ -89,10 +89,9 @@ function cv(algorithm::AbstractMMAlg, problem, grid::G, dataset_split::Tuple{S1,
         foreach(X -> StatsBase.transform!(F, X), (train_X, val_X, test_X))
         
         # Create a problem object for the training set.
-        train_idx = extract_indices(problem, train_Y)
         train_problem = change_data(problem, train_Y, train_X)
         extras = __mm_init__(algorithm, train_problem, nothing)
-        set_initial_coefficients!(train_problem, problem, train_idx)
+        set_initial_coefficients_and_intercept!(train_problem, zero(floattype(train_problem)))
 
         for (i, s) in enumerate(grid)
             # Obtain solution as function of s.
@@ -105,8 +104,6 @@ function cv(algorithm::AbstractMMAlg, problem, grid::G, dataset_split::Tuple{S1,
                     maxiter=maxiter, gtol=tol, nesterov_threshold=0,
                 )
             end
-            copyto!(train_problem.coeff, train_problem.proj)
-            # copy_to_buffer!(train_problem)
 
             # Evaluate the solution.
             r = scoref(train_problem, (train_Y, train_X), (val_Y, val_X), (test_Y, test_X))
