@@ -178,31 +178,20 @@ Return the data matrix used to fit the SVM.
 """
 get_problem_data(problem::BinarySVMProblem) = problem.X
 
-# helper function to write interface for accessors
-function __get_slope_and_coefficients__(arr::AbstractVector, intercept)
-    len = length(arr)
-    if intercept
-        b, w = arr[1], view(arr, 2:len)
-    else
-        b, w = zero(eltype(arr)), view(arr, 1:len)
-    end
-    return b, w
-end
-
 """
 Access model parameters (intercept + coefficients).
 """
-get_params(problem::BinarySVMProblem) = __get_slope_and_coefficients__(problem.coeff, problem.intercept)
+get_params(problem::BinarySVMProblem) = __slope_and_coeff_views__(problem.coeff, problem.intercept)
 
 """
 Access previous model parameters (intercept + coefficients).
 """
-get_params_prev(problem::BinarySVMProblem) = __get_slope_and_coefficients__(problem.coeff_prev, problem.intercept)
+get_params_prev(problem::BinarySVMProblem) = __slope_and_coeff_views__(problem.coeff_prev, problem.intercept)
 
 """
 Access projected model parameters (intercept + coefficients).
 """
-get_params_proj(problem::BinarySVMProblem) = __get_slope_and_coefficients__(problem.proj, problem.intercept)
+get_params_proj(problem::BinarySVMProblem) = __slope_and_coeff_views__(problem.proj, problem.intercept)
 
 """
 Returns the number of samples, number of features, and number of categories, respectively.
@@ -515,42 +504,20 @@ Return the data matrix used to fit the SVM.
 """
 get_problem_data(problem::MultiSVMProblem) = problem.data
 
-# helper functions to write interface for accessors
-function __get_slope_and_coefficients__(arr::Matrix, intercept)
-    nrow, ncol = size(arr)
-    if intercept
-        b, w = view(arr, 1, :), view(arr, 2:nrow, :)
-    else
-        b, w = zeros(eltype(arr), ncol), view(arr, 1:nrow, :)
-    end
-    return b, w
-end
-
-function __get_slope_and_coefficients__(arr::VectorOfVectors, intercept)
-    len = length(arr)
-    b, w = __get_slope_and_coefficients__(arr[1], intercept)
-    for k in 2:len
-        b_k, w_k = __get_slope_and_coefficients__(arr[k], intercept)
-        push!(b, b_k)
-        push!(w, w_k)
-    end
-    return b, w
-end
-
 """
 Access model parameters (intercept + coefficients).
 """
-get_params(problem::MultiSVMProblem) = __get_slope_and_coefficients__(problem.coeff, problem.intercept)
+get_params(problem::MultiSVMProblem) = __slope_and_coeff_views__(problem.coeff, problem.intercept)
 
 """
 Access previous model parameters (intercept + coefficients).
 """
-get_params_prev(problem::MultiSVMProblem) = __get_slope_and_coefficients__(problem.coeff_prev, problem.intercept)
+get_params_prev(problem::MultiSVMProblem) = __slope_and_coeff_views__(problem.coeff_prev, problem.intercept)
 
 """
 Access projected model parameters (intercept + coefficients).
 """
-get_params_proj(problem::MultiSVMProblem) = __get_slope_and_coefficients__(problem.proj, problem.intercept)
+get_params_proj(problem::MultiSVMProblem) = __slope_and_coeff_views__(problem.proj, problem.intercept)
 
 """
     change_data(problem::BinarySVMProblem, labels::AbstractVector, data)

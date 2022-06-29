@@ -71,11 +71,10 @@ function __steepest_descent__(problem, extras, alpha, gamma)
     A∇g_w = res.main
     T = floattype(problem)
 
+    ∂g_b, ∇g_w = __slope_and_coeff_views__(∇g, intercept)
     if intercept
-        ∂g_b, ∇g_w = grad[1], view(∇g, 2:length(∇g))
         intercept_term = ∂g_b^2 + 2*∂g_b * dot(Abar, ∇g_w)
     else
-        ∂g_b, ∇g_w = zero(T), view(∇g, 1:length(∇g))
         intercept_term = zero(T)
     end
 

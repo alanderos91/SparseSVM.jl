@@ -177,7 +177,7 @@ function __linear_solve_SVD__(compute_LHS_and_RHS::Function, problem::BinarySVMP
         t = 1 - __H_inverse_quadratic__(H, Abar, buffer)
         b = (v - dot(Abar, w)) / t
         __apply_H_inverse__!(w, H, Abar, buffer, -b)
-        coeff[1] = b
+        __set_intercept_component__!(coeff, b)
     end
 
     return nothing

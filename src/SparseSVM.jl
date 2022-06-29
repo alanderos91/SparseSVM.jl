@@ -115,6 +115,8 @@ function __mm_init__(algorithm, problem::MultiSVMProblem, extras)
     return extras
 end
 
+const INTERCEPT_INDEX = Val(:last)
+
 const DEFAULT_ANNEALING = geometric_progression
 const DEFAULT_CALLBACK = __do_nothing_callback__
 const DEFAULT_SCORE_FUNCTION = prediction_errors

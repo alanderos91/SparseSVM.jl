@@ -1,3 +1,79 @@
+#
+# Helper function to write interface for accessors. These will depend on the format used.
+#
+#   - Val{:last}  ==> [w, b] format; b is in the last index.
+#   - Val{:first} ==> [b, w] format; b is in teh first index.
+#
+#   - Vectors: β = [w, b] or [b, w], where w represents slopes/weights/coefficients and b is the intercept
+#   - Matrices: B = [β₁ β₂ ... βₖ], where column βᵢ contains parameters for SVM i.
+#   - VectorOfVectors: B = [β₁, β₂, ... βₖ]. B is a ragged array in which subset βᵢ contains parameters for SVM i.
+#
+
+__get_intercept_index__(arr) = __get_intercept_index__(INTERCEPT_INDEX, arr)
+
+# [w, b] format
+__get_intercept_index__(::Val{:last}, arr::AbstractVector) = lastindex(arr)
+__get_intercept_index__(::Val{:last}, arr::AbstractMatrix) = lastindex(arr, 1)
+
+# [b, w] format
+__get_intercept_index__(::Val{:first}, arr::AbstractVector) = firstindex(arr)
+__get_intercept_index__(::Val{:first}, arr::AbstractMatrix) = firstindex(arr, 1)
+
+function __set_intercept_component__!(arr, val)
+    index = __get_intercept_index__(arr)
+    arr[index] = val
+end
+
+__coeff_range__(nparams) = __coeff_range__(INTERCEPT_INDEX, nparams)
+
+# [w, b] format
+__coeff_range__(::Val{:last}, nparams) = Base.OneTo(nparams)
+
+# [b, w] format
+__coeff_range__(::Val{:first}, nparams) = 2:nparams
+
+function __slope_and_coeff_views__(arr::AbstractVector, intercept)
+    len = length(arr)
+
+    if intercept
+        int_idx = __get_intercept_index__(arr)
+        coeff_idx = __coeff_range__(len-1)
+        b, w = arr[int_idx], view(arr, coeff_idx)
+    else
+        b, w = zero(eltype(arr)), view(arr, Base.OneTo(len))
+    end
+
+    return b, w
+end
+
+function __slope_and_coeff_views__(arr::Matrix, intercept)
+    nrow, ncol = size(arr)
+
+    if intercept
+        int_idx = __get_intercept_index__(arr)
+        coeff_idx = __coeff_range__(nrow-1)
+        b, w = view(arr, int_idx, :), view(arr, coeff_idx, :)
+    else
+        b, w = zeros(eltype(arr), ncol), view(arr, Base.OneTo(nrow), :)
+    end
+
+    return b, w
+end
+
+function __slope_and_coeff_views__(arr::VectorOfVectors, intercept)
+    len = length(arr)
+    b, w = __slope_and_coeff_views__(arr[1], intercept)
+    for k in 2:len
+        b_k, w_k = __slope_and_coeff_views__(arr[k], intercept)
+        push!(b, b_k)
+        push!(w, w_k)
+    end
+    return b, w
+end
+
+#
+#   Helper functions for evaluating residuals and computing gradients.
+#
 function __predicted_response__!(r, X, b, w)
     if iszero(b)
         mul!(r, X, w)
@@ -63,17 +139,15 @@ function __evaluate_gradient__(problem, lambda, rho, extras)
 
     # ∇gᵨ(β ∣ βₘ) = -c1*[1ᵀr; Aᵀr] - c2*qₘ + c3*[0,w]
     c1, c2, c3 = convert(T, 1 / sqrt(n)), convert(T, rho), convert(T, lambda)
+    _, ∇g_w = __slope_and_coeff_views__(∇g, intercept)
+
     if intercept
-        ∇g[1] = sum(r) * c1
-        ∇g_w = view(∇g, 2:length(∇g))
-        mul!(∇g_w, A', r)
-        axpby!(-c2, q, -c1, ∇g)     # = -c1*[1ᵀr; Aᵀr] - c2*qₘ
-        axpy!(c3, w, ∇g_w)          # + c3*[0,w]
-    else
-        mul!(∇g, A', r)             # accumulate Aᵀr
-        axpby!(-c2, q, -c1, ∇g)     # = -c1*Aᵀrₘ - c2*qₘ
-        axpy!(c3, w, ∇g)            # + c3*w
+        __set_intercept_component__!(∇g, -sum(r) * c1)
     end
+
+    mul!(∇g_w, A', r)
+    axpby!(-c2, q, -c1, ∇g)     # = -c1*[1ᵀr; Aᵀr] - c2*qₘ
+    axpy!(c3, w, ∇g_w)          # + c3*[0,w]
 
     return nothing
 end
@@ -88,15 +162,14 @@ function __evaluate_reg_gradient__(problem, lambda, extras)
 
     # ∇gᵨ(β ∣ βₘ) = -c1*[1ᵀr; Aᵀr] + c2*[0,w]
     c1, c2 = convert(T, 1 / sqrt(n)), convert(T, lambda)
+    _, ∇g_w = __slope_and_coeff_views__(∇g, intercept)
+
     if intercept
-        ∇g[1] = sum(r) * c1
-        ∇g_w = view(∇g, 2:length(∇g))
-        mul!(∇g_w, A', r)           # = [1ᵀr; Aᵀr]
-        axpby!(c2, w, -c1, ∇g_w)    # = -c1*[1ᵀr; Aᵀr] + c2*[0,w]
-    else
-        mul!(∇g, A', r)             # = Aᵀr
-        axpby!(c2, w, -c1, ∇g)      # = -c1*Aᵀrₘ + c2*w
+        __set_intercept_component__!(∇g, -sum(r) * c1)
     end
+
+    mul!(∇g_w, A', r)           # = [1ᵀr; Aᵀr]
+    axpby!(c2, w, -c1, ∇g_w)    # = -c1*[1ᵀr; Aᵀr] + c2*[0,w]
 
     return nothing
 end
@@ -223,13 +296,8 @@ function prediction_errors(model, train_set, validation_set, test_set)
 end
 
 function set_initial_coefficients!(problem::BinarySVMProblem, v::Real)
-    array = problem.coeff_prev
-    idx = if problem.intercept
-        2:length(array)
-    else
-        1:length(array)
-    end
-    fill!(view(array, idx), v)
+    _, w = get_params_prev(problem)
+    fill!(w, v)
 end
 
 function set_initial_coefficients!(problem::MultiSVMProblem, v::Real)
