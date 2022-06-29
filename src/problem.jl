@@ -13,23 +13,22 @@ determine_number_svms(::OVR, c) = c
 has_inferrable_encoding(::Type{T}) where T <: Union{Number,AbstractString,Symbol} = true
 has_inferrable_encoding(x) = false
 
-function create_X_and_K(kernel::Kernel, y, data, intercept)
-    K = kernelmatrix(kernel, data, obsdim=1)
-    rmul!(K, Diagonal(y))
-    T = eltype(K)
-    intercept && (K = [K ones(T, size(K, 1))])
-    X = copy(data)
-    return X, K
-end
+create_X_and_K(kernel::Kernel, y, data) = (copy(data), rmul!( kernelmatrix(kernel, data, obsdim=1), Diagonal(y) ))
 
-function create_X_and_K(::Nothing, y, data, intercept)
-    T = eltype(data)
-    X = intercept ? [data ones(T, size(data, 1))] : copy(data)
-    return X, nothing
-end
+create_X_and_K(::Nothing, y, data) = (copy(data), nothing)
 
-function alloc_targets!(y, l, me, oe)
-    y .= convertlabel.(me, l, oe)
+alloc_targets!(y, l, margin_enc, ovr_enc) = map!(li -> MLDataUtils.convertlabel(margin_enc, li, ovr_enc), y, l)
+
+alloc_coefficients(::Nothing, data, n, p, intercept) = similar(data, intercept+p)
+alloc_coefficients(::Kernel, data, n, p, intercept) = similar(data, intercept+n)
+alloc_coefficients(::Nothing, data, n, p, nsvms, intercept) = similar(data, intercept+p, nsvms)
+alloc_coefficients(::Kernel, data, n, p, nsvms, intercept) = similar(data, intercept+n, nsvms)
+
+get_coefficients_view(::Nothing, data, arr::Matrix, n, k, intercept) = view(arr, :, k)
+
+function get_coefficients_view(::Kernel, data, arr::VectorOfVectors, n, k, intercept)
+    push!(arr, similar(data, intercept+n))
+    return arr[k]
 end
 
 abstract type AbstractSVM end
@@ -40,7 +39,7 @@ struct BinarySVMProblem{T,S,YT,XT,KT,LT,encT,kernT,coeffT,resT,gradT} <: Abstrac
 
     y::YT           # targets, n × 1
     X::XT           # features matrix, n × p
-    K::KT           # kernel matrix, n × n
+    KY::KT           # kernel matrix, n × n
     intercept::Bool # indicates presence (true) or absence (false) of intercept term
 
     labels::LT          # original labels
@@ -55,7 +54,7 @@ struct BinarySVMProblem{T,S,YT,XT,KT,LT,encT,kernT,coeffT,resT,gradT} <: Abstrac
     grad::gradT         # gradient with respect to coefficients
 
     function BinarySVMProblem{T}(n::Int, p::Int,
-            y::YT, X::XT, K::KT, intercept::Bool,
+            y::YT, X::XT, KY::KT, intercept::Bool,
             labels::AbstractVector{S}, ovr_encoding::encT,
             kernel::kernT, coeff::coeffT, coeff_prev::coeffT,
             proj::coeffT, res::resT, grad::gradT
@@ -73,7 +72,7 @@ struct BinarySVMProblem{T,S,YT,XT,KT,LT,encT,kernT,coeffT,resT,gradT} <: Abstrac
         LT = typeof(labels)
 
         new{T,S,YT,XT,KT,LT,encT,kernT,coeffT,resT,gradT}(
-            n, p, y, X, K, intercept,
+            n, p, y, X, KY, intercept,
             labels, ovr_encoding,
             kernel, coeff, coeff_prev,
             proj, res, grad
@@ -125,14 +124,14 @@ function BinarySVMProblem(labels, data, positive_label::S, coeff, coeff_prev, pr
     alloc_targets!(y, labels, margin_encoding, ovr_encoding)
 
     # Create design matrices.
-    X, K = create_X_and_K(kernel, y, data, intercept)
+    X, KY = create_X_and_K(kernel, y, data)
 
     # Allocate additional data structures used to fit a model.
     res = (; main=similar(data, n), dist=similar(coeff))
     grad = similar(coeff)
 
     return BinarySVMProblem{T}(n, p,
-        y, X, K, intercept,
+        y, X, KY, intercept,
         labels, ovr_encoding,
         kernel, coeff, coeff_prev,
         proj, res, grad,
@@ -147,7 +146,7 @@ function BinarySVMProblem(labels, data, positive_label;
     n, p = size(data)
 
     # Allocate arrays for coefficients.
-    coeff = kernel isa Nothing ? similar(data, p+intercept) : similar(data, n+intercept)
+    coeff = alloc_coefficients(kernel, data, n, p, intercept)
     coeff_prev = similar(coeff)
     proj = similar(coeff)
 
@@ -168,16 +167,42 @@ labeltype(::BinarySVMProblem{T,S}) where {T,S} = S
 """
 Return the design matrix used for fitting a classifier.
 
-Uses `problem.X` when `problem.kernel isa Nothing` and `problem.K` when `problem.kernel isa Kernel` from KernelFunctions.jl.
+Uses `problem.X` when `problem.kernel isa Nothing` and `problem.KY` when `problem.kernel isa Kernel` from KernelFunctions.jl.
 """
 get_design_matrix(problem::BinarySVMProblem) = __get_design_matrix__(problem.kernel, problem) # dispatch
 __get_design_matrix__(::Nothing, problem::BinarySVMProblem) = problem.X  # linear case
-__get_design_matrix__(::Kernel, problem::BinarySVMProblem) = problem.K   # nonlinear case
+__get_design_matrix__(::Kernel, problem::BinarySVMProblem) = problem.KY   # nonlinear case
 
 """
 Return the data matrix used to fit the SVM.
 """
 get_problem_data(problem::BinarySVMProblem) = problem.X
+
+# helper function to write interface for accessors
+function __get_slope_and_coefficients__(arr::AbstractVector, intercept)
+    len = length(arr)
+    if intercept
+        b, w = arr[1], view(arr, 2:len)
+    else
+        b, w = zero(eltype(arr)), view(arr, 1:len)
+    end
+    return b, w
+end
+
+"""
+Access model parameters (intercept + coefficients).
+"""
+get_params(problem::BinarySVMProblem) = __get_slope_and_coefficients__(problem.coeff, problem.intercept)
+
+"""
+Access previous model parameters (intercept + coefficients).
+"""
+get_params_prev(problem::BinarySVMProblem) = __get_slope_and_coefficients__(problem.coeff_prev, problem.intercept)
+
+"""
+Access projected model parameters (intercept + coefficients).
+"""
+get_params_proj(problem::BinarySVMProblem) = __get_slope_and_coefficients__(problem.proj, problem.intercept)
 
 """
 Returns the number of samples, number of features, and number of categories, respectively.
@@ -213,17 +238,17 @@ function change_data(problem::BinarySVMProblem, labels, data)
     alloc_targets!(y, labels, margin_encoding, ovr_encoding)
 
     # Create design matrices.
-    X, K = create_X_and_K(kernel, y, data, intercept)
+    X, KY = create_X_and_K(kernel, y, data)
 
     # Allocate additional data structures used to fit a model.
-    coeff = kernel isa Nothing ? similar(data, p+intercept) : similar(data, n+intercept)
+    coeff = alloc_coefficients(kernel, data, n, p, intercept)
     coeff_prev = similar(coeff)
     proj = similar(coeff)
     res = (; main=similar(data, n), dist=similar(coeff))
     grad = similar(coeff)
 
     return BinarySVMProblem{T}(n, p,
-        y, X, K, intercept,
+        y, X, KY, intercept,
         labels, ovr_encoding,
         kernel, coeff, coeff_prev,
         proj, res, grad,
@@ -257,36 +282,27 @@ See also: [`classify`](@ref)
 predict(problem::BinarySVMProblem, x) = __predict__(problem.kernel, problem, x)
 
 function __predict__(::Nothing, problem::BinarySVMProblem, x::AbstractVector)
-    @unpack p, proj, intercept = problem
-    β = view(proj, 1:p)
-    β0 = proj[p+intercept]
-    yhat = dot(view(x, 1:p), β)
-    intercept && (yhat += β0)
+    @unpack p = problem
+    b, w = get_params_proj(problem)
+    yhat = b + dot(view(x, 1:p), w)
     return yhat
 end
 
 function __predict__(::Nothing, problem::BinarySVMProblem, X::AbstractMatrix)
-    @unpack p, proj, intercept = problem
-    β = view(proj, 1:p)
-    β0 = proj[p+intercept]
-    yhat = view(X, :, 1:p) * β
-    intercept && (yhat .+= β0)
+    @unpack p = problem
+    b, w = get_params_proj(problem)
+    yhat = b .+ view(X, :, 1:p) * w
     return yhat
 end
 
 function __predict__(::Kernel, problem::BinarySVMProblem, _x::AbstractVector)
-    @unpack n, p, intercept = problem
+    @unpack n, p, y, X, kernel, intercept = problem
     x = view(_x, 1:p)
-    kappa = problem.kernel
-    α = view(problem.proj, 1:n)
-    α0 = problem.proj[n+intercept]
-    X = problem.X
-    y = problem.y
-    yhat = zero(floattype(problem))
+    b, w = get_params_proj(problem)
+    yhat = b
     for (j, xⱼ) in enumerate(eachrow(X))
-        yhat += α[j] * y[j] * kappa(x, xⱼ)
+        yhat = yhat + w[j] * y[j] * kernel(x, xⱼ)
     end
-    intercept && (yhat += α0)
     return yhat
 end
 
@@ -377,13 +393,10 @@ function __construct_svms__(::OVO, lm, nsvms, labels, data, coeff, coeff_prev, p
         ls, ds = datasubset(labeled_data, idx, obsdim=1)
         n = length(ls)
 
-        # Allocate additional data structures used to fit a model.
-        if kernel isa Nothing
-            cv, cpv, pv = view(coeff, :, k), view(coeff_prev, :, k), view(proj, :, k)
-        else
-            foreach(arr -> push!(arr, similar(data, n+intercept)), (coeff, coeff_prev, proj))
-            cv, cpv, pv = coeff[k], coeff_prev[k], proj[k]
-        end
+        # Assign view of coefficients from parent array.
+        cv = get_coefficients_view(kernel, ds, coeff, n, k, intercept)
+        cpv = get_coefficients_view(kernel, ds, coeff_prev, n, k, intercept)
+        pv = get_coefficients_view(kernel, ds, proj, n, k, intercept)
 
         idx, BinarySVMProblem(ls, ds, pl, cv, cpv, pv; kernel=kernel, intercept=intercept, negative_label=nl)
     end
@@ -410,7 +423,13 @@ function __construct_svms__(::OVR, lm, nsvms, labels, data, coeff, coeff_prev, p
     # helper function to create an SVM usingn OVR
     instantiate_svm = function(i)
         pl = ul[i]
-        cv, cpv, pv = view(coeff, :, i), view(coeff_prev, :, i), view(proj, :, i)
+        n = length(ls)
+
+        # Assign view of coefficients from parent array.
+        cv = get_coefficients_view(kernel, ds, coeff, n, i, intercept)
+        cpv = get_coefficients_view(kernel, ds, coeff_prev, n, i, intercept)
+        pv = get_coefficients_view(kernel, ds, proj, n, i, intercept)
+        
         BinarySVMProblem(ls, ds, pl, cv, cpv, pv; kernel=kernel, intercept=intercept, negative_label=nl)
     end
 
@@ -462,15 +481,11 @@ function MultiSVMProblem(labels, data;
 
     # Allocate arrays for coefficients.
     nsvms = determine_number_svms(strategy, c)
-    if strategy isa OVR
-        if kernel isa Nothing
-            coeff = similar(data, p+intercept, nsvms)
-        else
-            coeff = similar(data, n+intercept, nsvms)
-        end
+    if kernel isa Nothing || strategy isa OVR
+        coeff = alloc_coefficients(kernel, data, n, p, nsvms, intercept)
         coeff_prev = similar(coeff)
         proj = similar(coeff)
-    else # OVO
+    else # nonlinear w/ OVO strategy
         coeff = VectorOfVectors{eltype(data)}()
         coeff_prev = VectorOfVectors{eltype(data)}()
         proj = VectorOfVectors{eltype(data)}()
@@ -500,6 +515,43 @@ Return the data matrix used to fit the SVM.
 """
 get_problem_data(problem::MultiSVMProblem) = problem.data
 
+# helper functions to write interface for accessors
+function __get_slope_and_coefficients__(arr::Matrix, intercept)
+    nrow, ncol = size(arr)
+    if intercept
+        b, w = view(arr, 1, :), view(arr, 2:nrow, :)
+    else
+        b, w = zeros(eltype(arr), ncol), view(arr, 1:nrow, :)
+    end
+    return b, w
+end
+
+function __get_slope_and_coefficients__(arr::VectorOfVectors, intercept)
+    len = length(arr)
+    b, w = __get_slope_and_coefficients__(arr[1], intercept)
+    for k in 2:len
+        b_k, w_k = __get_slope_and_coefficients__(arr[k], intercept)
+        push!(b, b_k)
+        push!(w, w_k)
+    end
+    return b, w
+end
+
+"""
+Access model parameters (intercept + coefficients).
+"""
+get_params(problem::MultiSVMProblem) = __get_slope_and_coefficients__(problem.coeff, problem.intercept)
+
+"""
+Access previous model parameters (intercept + coefficients).
+"""
+get_params_prev(problem::MultiSVMProblem) = __get_slope_and_coefficients__(problem.coeff_prev, problem.intercept)
+
+"""
+Access projected model parameters (intercept + coefficients).
+"""
+get_params_proj(problem::MultiSVMProblem) = __get_slope_and_coefficients__(problem.proj, problem.intercept)
+
 """
     change_data(problem::BinarySVMProblem, labels::AbstractVector, data)
 
@@ -525,12 +577,8 @@ function change_data(problem::MultiSVMProblem, labels, data)
     n, p = length(labels), has_intercept ? size(data, 2)-1 : size(data, 2)
 
     # Allocate additional data structures used to fit a model.
-    if strategy isa OVR
-        if kernel isa Nothing
-            coeff = similar(data, p+intercept, nsvms)
-        else
-            coeff = similar(data, n+intercept, nsvms)
-        end
+    if kernel isa Nothing || strategy isa OVR
+        coeff = alloc_coefficients(kernel, data, n, p, nsvms, intercept)
         coeff_prev = similar(coeff)
         proj = similar(coeff)
     else # OVO
@@ -574,20 +622,19 @@ function __change_svm_data__(::OVO, lm, problem, labels, data, coeff, coeff_prev
         alloc_targets!(y, ls, margin_encoding, ovr_encoding)
 
         # Create design matrices.
-        X, K = create_X_and_K(kernel, y, ds, intercept)
+        X, KY = create_X_and_K(kernel, y, ds)
 
-        # Allocate additional data structures used to fit a model.
-        if kernel isa Nothing
-            cv, cpv, pv = view(coeff, :, i), view(coeff_prev, :, i), view(proj, :, i)
-        else
-            foreach(arr -> push!(arr, similar(ds, n+intercept)), (coeff, coeff_prev, proj))
-            cv, cpv, pv = coeff[i], coeff_prev[i], proj[i]
-        end
+        # Assign view of coefficients from parent array.
+        cv = get_coefficients_view(kernel, ds, coeff, n, i, intercept)
+        cpv = get_coefficients_view(kernel, ds, coeff_prev, n, i, intercept)
+        pv = get_coefficients_view(kernel, ds, proj, n, i, intercept)
+
+        # Allocate additional data structures.
         res = (; main=similar(ds, n), dist=similar(cv))
         grad = similar(cv)
 
         svm = BinarySVMProblem{T}(n, p,
-            y, X, K, intercept,
+            y, X, KY, intercept,
             ls, ovr_encoding,
             kernel, cv, cpv, pv, res, grad,
         )
@@ -623,15 +670,19 @@ function __change_svm_data__(::OVR, lm, problem, labels, data, coeff, coeff_prev
         alloc_targets!(y, labels, margin_encoding, ovr_encoding)
 
         # Create design matrices.
-        X, K = create_X_and_K(kernel, y, data, intercept)
+        X, KY = create_X_and_K(kernel, y, data)
 
-        # Allocate additional data structures used to fit a model.
-        cv, cpv, pv = view(coeff, :, i), view(coeff_prev, :, i), view(proj, :, i)
+        # Assign view of coefficients from parent array.
+        cv = get_coefficients_view(kernel, ds, coeff, n, i, intercept)
+        cpv = get_coefficients_view(kernel, ds, coeff_prev, n, i, intercept)
+        pv = get_coefficients_view(kernel, ds, proj, n, i, intercept)
+        
+        # Allocate additional data structures.
         res = (; main=similar(data, n), dist=similar(cv))
         grad = similar(cv)
 
         return BinarySVMProblem{T}(n, p,
-            y, X, K, intercept,
+            y, X, KY, intercept,
             labels, ovr_encoding,
             kernel, cv, cpv, pv, res, grad,
         )

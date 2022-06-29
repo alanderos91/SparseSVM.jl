@@ -2,40 +2,38 @@ using Base: BinaryPlatforms
 using SparseSVM, KernelFunctions
 using LinearAlgebra, Random, Test
 
-SSVM = SparseSVM
+SVM = SparseSVM
 
 @testset "MultiClassStrategy" begin
-    @test SSVM.determine_number_svms(OVO(), 10) == 45
-    @test SSVM.determine_number_svms(OVR(), 10) == 10
+    @test SVM.determine_number_svms(OVO(), 10) == 45
+    @test SVM.determine_number_svms(OVR(), 10) == 10
 end
 
 @testset "automatic OneVsRest encodings" begin
-    @test SSVM.has_inferrable_encoding(Int) == true
-    @test SSVM.has_inferrable_encoding(String) == true
-    @test SSVM.has_inferrable_encoding(Symbol) == true
-    @test SSVM.has_inferrable_encoding(Char) == false
+    @test SVM.has_inferrable_encoding(Int) == true
+    @test SVM.has_inferrable_encoding(String) == true
+    @test SVM.has_inferrable_encoding(Symbol) == true
+    @test SVM.has_inferrable_encoding(Char) == false
 end
 
 @testset "design matrix" begin
-    data = randn(20, 5)
+    y, data = rand((-1.0, 1.0), 20), randn(20, 5)
 
-    X, K = SSVM.create_X_and_K(nothing, data, false)
+    X, KY = SVM.create_X_and_K(nothing, y, data)
     @test X == data
-    @test (K isa Nothing) == true
+    @test (KY isa Nothing) == true
 
-    X, K = SSVM.create_X_and_K(nothing, data, true)
-    @test @views(X[:,1:end-1]) == data
-    @test all(isequal(1), @views(X[:,end]))
-    @test (K isa Nothing) == true
-
-    X, K = SSVM.create_X_and_K(RBFKernel(), data, false)
+    X, KY = SVM.create_X_and_K(nothing, y, data)
     @test X == data
-    @test K ≈ kernelmatrix(RBFKernel(), data, obsdim=1)
+    @test (KY isa Nothing) == true
 
-    X, K = SSVM.create_X_and_K(RBFKernel(), data, true)
+    X, KY = SVM.create_X_and_K(RBFKernel(), y, data)
     @test X == data
-    @test @views(K[:,1:end-1]) ≈ kernelmatrix(RBFKernel(), data, obsdim=1)
-    @test all(isequal(1), @views(K[:,end]))
+    @test KY ≈ kernelmatrix(RBFKernel(), data, obsdim=1) * Diagonal(y)
+
+    X, KY = SVM.create_X_and_K(RBFKernel(), y, data)
+    @test X == data
+    @test KY ≈ kernelmatrix(RBFKernel(), data, obsdim=1) * Diagonal(y)
 end
 
 @testset "BinarySVMProblem" begin
@@ -56,32 +54,32 @@ end
 
         @testset "defaults" begin
             prob = linear_classifier("a", nothing)
-            @test SSVM.poslabel(prob) == "a"
-            @test SSVM.neglabel(prob) == "b"
-            @test SSVM.__classify__(prob,  1) == "a"
-            @test SSVM.__classify__(prob, -1) == "b"
+            @test SVM.poslabel(prob) == "a"
+            @test SVM.neglabel(prob) == "b"
+            @test SVM.__classify__(prob,  1) == "a"
+            @test SVM.__classify__(prob, -1) == "b"
         end
 
         @testset "labels w/ specified negative_label" begin
             prob = linear_classifier("a", "b")
-            @test SSVM.poslabel(prob) == "a"
-            @test SSVM.neglabel(prob) == "b"
-            @test SSVM.__classify__(prob,  1) == "a"
-            @test SSVM.__classify__(prob, -1) == "b"
+            @test SVM.poslabel(prob) == "a"
+            @test SVM.neglabel(prob) == "b"
+            @test SVM.__classify__(prob,  1) == "a"
+            @test SVM.__classify__(prob, -1) == "b"
 
             prob = linear_classifier("a", "something_else")
-            @test SSVM.poslabel(prob) == "a"
-            @test SSVM.neglabel(prob) == "something_else"
-            @test SSVM.__classify__(prob,  1) == "a"
-            @test SSVM.__classify__(prob, -1) == "something_else"
+            @test SVM.poslabel(prob) == "a"
+            @test SVM.neglabel(prob) == "something_else"
+            @test SVM.__classify__(prob,  1) == "a"
+            @test SVM.__classify__(prob, -1) == "something_else"
         end
 
         @testset "switch positive label" begin
             prob = linear_classifier("b", nothing)
-            @test SSVM.poslabel(prob) == "b"
-            @test SSVM.neglabel(prob) == "a"
-            @test SSVM.__classify__(prob,  1) == "b"
-            @test SSVM.__classify__(prob, -1) == "a"
+            @test SVM.poslabel(prob) == "b"
+            @test SVM.neglabel(prob) == "a"
+            @test SVM.__classify__(prob,  1) == "b"
+            @test SVM.__classify__(prob, -1) == "a"
         end
     end
 
@@ -99,26 +97,26 @@ end
 
         @testset "defaults" begin
             prob = linear_classifier("a", nothing)
-            @test SSVM.poslabel(prob) == "a"
-            @test SSVM.neglabel(prob) == "not_a"
-            @test SSVM.__classify__(prob,  1) == "a"
-            @test SSVM.__classify__(prob, -1) == "not_a"
+            @test SVM.poslabel(prob) == "a"
+            @test SVM.neglabel(prob) == "not_a"
+            @test SVM.__classify__(prob,  1) == "a"
+            @test SVM.__classify__(prob, -1) == "not_a"
         end
 
         @testset "labels w/ specified negative_label" begin
             prob = linear_classifier("a", "!")
-            @test SSVM.poslabel(prob) == "a"
-            @test SSVM.neglabel(prob) == "!"
-            @test SSVM.__classify__(prob,  1) == "a"
-            @test SSVM.__classify__(prob, -1) == "!"
+            @test SVM.poslabel(prob) == "a"
+            @test SVM.neglabel(prob) == "!"
+            @test SVM.__classify__(prob,  1) == "a"
+            @test SVM.__classify__(prob, -1) == "!"
         end
 
         @testset "switch positive label" begin
             prob = linear_classifier("b", nothing)
-            @test SSVM.poslabel(prob) == "b"
-            @test SSVM.neglabel(prob) == "not_b"
-            @test SSVM.__classify__(prob,  1) == "b"
-            @test SSVM.__classify__(prob, -1) == "not_b"
+            @test SVM.poslabel(prob) == "b"
+            @test SVM.neglabel(prob) == "not_b"
+            @test SVM.__classify__(prob,  1) == "b"
+            @test SVM.__classify__(prob, -1) == "not_b"
         end
     end
 
@@ -126,19 +124,13 @@ end
         labeled_data = (rand(("a", "b"), n), randn(n, p)) # tuple of labels and data
         function test_classifier(intercept)
             prob = BinarySVMProblem(labeled_data..., "a", intercept=intercept, kernel=nothing)
-            T = SSVM.floattype(prob)
-            X = SSVM.get_design_matrix(prob)
+            T = SVM.floattype(prob)
+            X = SVM.get_design_matrix(prob)
 
-            if intercept
-                @test labeled_data[2] == @views(X[:,1:end-1])
-                @test all(isequal(1), @views(X[:,end]))
-            else
-                @test labeled_data[2] == X
-            end
-
-            @test (prob.K isa Nothing) == true
+            @test labeled_data[2] == X
+            @test (prob.KY isa Nothing) == true
             @test sort!(unique(prob.y)) == T[-1, 1]
-            @test SSVM.probdims(prob) == (n, p, 2)
+            @test SVM.probdims(prob) == (n, p, 2)
             @test prob.intercept == intercept
             @test all(arr -> length(arr) == p+intercept, (prob.coeff, prob.coeff_prev, prob.proj, prob.grad))
             @test length(prob.res.main) == n
@@ -160,19 +152,13 @@ end
         labeled_data = (rand(("a", "b"), n), randn(n, p)) # tuple of labels and data
         function test_classifier(intercept)
             prob = BinarySVMProblem(labeled_data..., "a", intercept=intercept, kernel=RBFKernel())
-            T = SSVM.floattype(prob)
-            K = SSVM.get_design_matrix(prob)
+            T = SVM.floattype(prob)
+            KY = SVM.get_design_matrix(prob)
 
-            if intercept
-                @test @views(K[:,1:end-1]) ≈ kernelmatrix(RBFKernel(), labeled_data[2], obsdim=1)
-                @test all(isequal(1), @views(K[:,end]))
-            else
-                @test K ≈ kernelmatrix(RBFKernel(), labeled_data[2], obsdim=1)
-            end
-
+            @test KY ≈ kernelmatrix(RBFKernel(), labeled_data[2], obsdim=1) * Diagonal(prob.y)
             @test prob.X == labeled_data[2]
             @test sort!(unique(prob.y)) == T[-1, 1]
-            @test SSVM.probdims(prob) == (n, p, 2)
+            @test SVM.probdims(prob) == (n, p, 2)
             @test prob.intercept == intercept
             @test all(arr -> length(arr) == n+intercept, (prob.coeff, prob.coeff_prev, prob.proj, prob.grad))
             @test length(prob.res.main) == n
@@ -202,13 +188,13 @@ end
 
     @testset "One versus One (OVO)" begin
         prob = classifier(false, nothing, OVO())
-        @test SSVM.probdims(prob) == (n, p, c)
+        @test SVM.probdims(prob) == (n, p, c)
         @test length(prob.svm) == binomial(c, 2)
     end
 
     @testset "One versus Rest (OVR)" begin
         prob = classifier(false, nothing, OVR())
-        @test SSVM.probdims(prob) == (n, p, c)
+        @test SVM.probdims(prob) == (n, p, c)
         @test length(prob.svm) == c
     end
 end

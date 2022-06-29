@@ -124,21 +124,21 @@ const DEFAULT_DTOL = 1e-3
 const DEFAULT_RTOL = 1e-6
 
 """
-    fit(algorithm, problem, s; kwargs...)
+    fit(algorithm, problem, lambda, s; kwargs...)
 
 Solve optimization problem at sparsity level `s`.
 
 The solution is obtained via a proximal distance `algorithm` that gradually anneals parameter estimates
 toward the target sparsity set.
 """
-function fit(algorithm::AbstractMMAlg, problem::BinarySVMProblem, s::Real; kwargs...)
+function fit(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real, s::Real; kwargs...)
     extras = __mm_init__(algorithm, problem, nothing) # initialize extra data structures
-    SparseSVM.fit!(algorithm, problem, s, extras, (true,false,); kwargs...)
+    SparseSVM.fit!(algorithm, problem, lambda, s, extras, (true,false,); kwargs...)
 end
 
-function fit(algorithm::AbstractMMAlg, problem::MultiSVMProblem, s::Real; kwargs...)
+function fit(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda::Real, s::Real; kwargs...)
     extras = [__mm_init__(algorithm, svm, nothing) for svm in problem.svm] # initialize extra data structures
-    SparseSVM.fit!(algorithm, problem, s, extras, (true,false,); kwargs...)
+    SparseSVM.fit!(algorithm, problem, lambda, s, extras, (true,false,); kwargs...)
 end
 
 """
@@ -167,7 +167,7 @@ Same as `fit(algorithm, problem, s)`, but with preallocated data structures in `
 
 See also: [`SparseSVM.anneal!`](@ref) for additional keyword arguments applied at the annealing step.
 """
-function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, s::Real,
+function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real, s::Real,
     extras=nothing,
     update_extras::NTuple{2,Bool}=(true,false,);
     nouter::Int=100,
@@ -185,7 +185,7 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, s::Real,
     end
 
     # Get problem info and extra data structures.
-    @unpack intercept, coeff, coeff_prev, proj = problem
+    @unpack coeff, coeff_prev, proj = problem
     @unpack projection = extras
     
     # Fix model size(s).
@@ -198,19 +198,19 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, s::Real,
     rho, iters = rho_init, 0
 
     # Update data structures due to hyperparameters.
-    update_extras[1] && __mm_update_sparsity__(algorithm, problem, rho, k, extras)
-    update_extras[2] && __mm_update_rho__(algorithm, problem, rho, k, extras)
+    update_extras[1] && __mm_update_sparsity__(algorithm, problem, lambda, rho, k, extras)
+    update_extras[2] && __mm_update_rho__(algorithm, problem, lambda, rho, k, extras)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
     apply_projection(projection, problem, k)
-    init_result = __evaluate_objective__(problem, rho, extras)
+    init_result = __evaluate_objective__(problem, lambda, rho, extras)
     result = SubproblemResult(0, init_result)
     cb(0, problem, rho, k, result)
     old = sqrt(result.distance)
 
     for iter in 1:nouter
         # Solve minimization problem for fixed rho.
-        result = SparseSVM.anneal!(algorithm, problem, rho, s, extras, (false,true,); verbose=verbose, cb=cb, kwargs...)
+        result = SparseSVM.anneal!(algorithm, problem, lambda, rho, s, extras, (false,true,); verbose=verbose, cb=cb, kwargs...)
 
         # Update total iteration count.
         iters += result.iters
@@ -231,7 +231,7 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, s::Real,
     
     # Project solution to the constraint set.
     apply_projection(projection, problem, k)
-    loss, obj, dist, gradsq = __evaluate_objective__(problem, rho, extras)
+    loss, obj, dist, gradsq = __evaluate_objective__(problem, lambda, rho, extras)
 
     if verbose
         print("\n\niters = ", iters)
@@ -244,7 +244,7 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, s::Real,
     return SubproblemResult(iters, loss, obj, dist, gradsq)
 end
 
-function fit!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, s::Real,
+function fit!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda::Real, s::Real,
     extras=nothing,
     update_extras::NTuple{2,Bool}=(true,false,);
     kwargs...)
@@ -259,7 +259,7 @@ function fit!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, s::Real,
     # Create closure to fit a particular SVM.
     function __fit__!(k)
         subproblem = problem.svm[k]
-        r = SparseSVM.fit!(algorithm, subproblem, s, extras[k], update_extras; kwargs...)
+        r = SparseSVM.fit!(algorithm, subproblem, lambda, s, extras[k], update_extras; kwargs...)
 
         i, l, o, d, g = r
         total_iter += i
@@ -287,9 +287,9 @@ end
 
 Solve the `rho`-penalized optimization problem at sparsity level `s`.
 """
-function anneal(algorithm::AbstractMMAlg, problem::BinarySVMProblem, rho::Real, s::Real; kwargs...)
+function anneal(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real, rho::Real, s::Real; kwargs...)
     extras = __mm_init__(algorithm, problem, nothing)
-    SparseSVM.anneal!(algorithm, problem, rho, s, extras, (true,true,); kwargs...)
+    SparseSVM.anneal!(algorithm, problem, lambda, rho, s, extras, (true,true,); kwargs...)
 end
 
 """
@@ -313,7 +313,7 @@ Same as `anneal(algorithm, problem, rho, s)`, but with preallocated data structu
 - `verbose`: Print convergence information (default=`false`).
 - `cb`: A callback function for extending functionality.
 """
-function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, rho::Real, s::Real,
+function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real, rho::Real, s::Real,
     extras=nothing,
     update_extras::NTuple{2,Bool}=(true,true);
     ninner::Int=10^4,
@@ -329,7 +329,7 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, rho::Real,
     end
 
     # Get problem info and extra data structures.
-    @unpack intercept, coeff, coeff_prev, proj = problem
+    @unpack coeff, coeff_prev, proj = problem
     @unpack projection = extras
 
     # Fix model size(s).
@@ -339,12 +339,12 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, rho::Real,
     copyto!(coeff, coeff_prev)
 
     # Update data structures due to hyperparameters.
-    update_extras[1] && __mm_update_sparsity__(algorithm, problem, rho, k, extras)
-    update_extras[2] && __mm_update_rho__(algorithm, problem, rho, k, extras)
+    update_extras[1] && __mm_update_sparsity__(algorithm, problem, lambda, rho, k, extras)
+    update_extras[2] && __mm_update_rho__(algorithm, problem, lambda, rho, k, extras)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
     apply_projection(projection, problem, k)
-    result = __evaluate_objective__(problem, rho, extras)
+    result = __evaluate_objective__(problem, lambda, rho, extras)
     cb(0, problem, rho, k, result)
     old = result.objective
 
@@ -360,11 +360,11 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, rho::Real,
         iters += 1
 
         # Apply the algorithm map to minimize the quadratic surrogate.
-        __mm_iterate__(algorithm, problem, rho, k, extras)
+        __mm_iterate__(algorithm, problem, lambda, rho, k, extras)
 
         # Update loss, objective, distance, and gradient.
         apply_projection(projection, problem, k)
-        result = __evaluate_objective__(problem, rho, extras)
+        result = __evaluate_objective__(problem, lambda, rho, extras)
 
         cb(iter, problem, rho, k, result)
 

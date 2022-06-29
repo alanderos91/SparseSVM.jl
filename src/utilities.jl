@@ -1,7 +1,18 @@
-function shifted_response!(z, y, Xβ)
+function __predicted_response__!(r, X, b, w)
+    if iszero(b)
+        mul!(r, X, w)
+    else
+        T = eltype(r)
+        fill!(r, b)
+        mul!(r, X, w, one(T), one(T))
+    end
+    return nothing
+end
+
+function __shifted_response__!(z, y, f)
     @inbounds for i in eachindex(z)
-        yi, Xβi = y[i], Xβ[i]
-        z[i] = ifelse(yi*Xβi < 1, yi, Xβi)
+        yi, fi = y[i], f[i]
+        z[i] = ifelse(yi*fi < 1, yi, fi)
     end
     return nothing
 end
@@ -17,22 +28,23 @@ The following flags control how residuals are evaluated:
 **Note**: The values for each flag should be known at compile-time!
 """
 function __evaluate_residuals__(problem::BinarySVMProblem, extras, need_main::Bool, need_dist::Bool)
-    @unpack y, coeff, proj, res = problem
+    @unpack n, y, coeff, proj, res = problem
     @unpack z = extras
-    β, pₘ, r, q = coeff, proj, res.main, res.dist
-    X = get_design_matrix(problem)
+
+    β, p, r, q = coeff, proj, res.main, res.dist
+    b, w = get_params(problem)          # intercept + coefficients
+    A = get_design_matrix(problem)      # X or KY
     T = SparseSVM.floattype(problem)
-    n, _, _ = probdims(problem)
     
-    if need_main # 1/sqrt(n) * (zₘ - X*β)
-        a = convert(T, 1 / sqrt(n))
-        mul!(r, X, β)
-        shifted_response!(z, y, r)
-        axpby!(a, z, -a, r)
+    if need_main # 1/sqrt(n) * (zₘ - A*β)
+        c1 = convert(T, 1 / sqrt(n))
+        __predicted_response__!(r, A, b, w)
+        __shifted_response__!(z, y, r)
+        axpby!(c1, z, -c1, r)
     end
 
     if need_dist # P(βₘ) - β
-        @. q = pₘ - β
+        @. q = p - β
     end
 
     return nothing
@@ -41,32 +53,50 @@ end
 """
 Evaluate the gradiant of the regression problem. Assumes residuals have been evaluated.
 """
-function __evaluate_gradient__(problem, rho, extras)
-    @unpack grad, res = problem
-    ∇g, r, q = grad, res.main, res.dist
-    X = get_design_matrix(problem)
-    T = SparseSVM.floattype(problem)
-    n, _, _ = probdims(problem)
+function __evaluate_gradient__(problem, lambda, rho, extras)
+    @unpack n, y, grad, res, kernel, intercept = problem
 
-    # ∇gᵨ(β ∣ βₘ)ⱼ = -[aXᵀ bI] * [rₘ, qₘ] = -a*Xᵀrₘ - b*qₘ
-    a, b = convert(T, 1 / sqrt(n)), convert(T, rho)
-    mul!(∇g, X', r)
-    axpby!(-b, q, -a, ∇g)
+    ∇g, r, q = grad, res.main, res.dist
+    _, w = get_params(problem) 
+    A = get_design_matrix(problem)
+    T = SparseSVM.floattype(problem)
+
+    # ∇gᵨ(β ∣ βₘ) = -c1*[1ᵀr; Aᵀr] - c2*qₘ + c3*[0,w]
+    c1, c2, c3 = convert(T, 1 / sqrt(n)), convert(T, rho), convert(T, lambda)
+    if intercept
+        ∇g[1] = sum(r) * c1
+        ∇g_w = view(∇g, 2:length(∇g))
+        mul!(∇g_w, A', r)
+        axpby!(-c2, q, -c1, ∇g)     # = -c1*[1ᵀr; Aᵀr] - c2*qₘ
+        axpy!(c3, w, ∇g_w)          # + c3*[0,w]
+    else
+        mul!(∇g, A', r)             # accumulate Aᵀr
+        axpby!(-c2, q, -c1, ∇g)     # = -c1*Aᵀrₘ - c2*qₘ
+        axpy!(c3, w, ∇g)            # + c3*w
+    end
 
     return nothing
 end
 
 function __evaluate_reg_gradient__(problem, lambda, extras)
-    @unpack coeff, res, grad = problem
-    ∇g, r, β = grad, res.main, coeff
-    X = get_design_matrix(problem)
-    T = SparseSVM.floattype(problem)
-    n, _, _ = probdims(problem)
+    @unpack n, y, grad, res, kernel, intercept = problem
 
-    # ∇gᵨ(β ∣ βₘ)ⱼ = -a*Xᵀrₘ + b*β
-    a, b = convert(T, 1 / sqrt(n)), convert(T, lambda)
-    mul!(∇g, X', r)
-    axpby!(b, β, -a, ∇g)
+    ∇g, r = grad, res.main
+    _, w = get_params(problem) 
+    A = get_design_matrix(problem)
+    T = SparseSVM.floattype(problem)
+
+    # ∇gᵨ(β ∣ βₘ) = -c1*[1ᵀr; Aᵀr] + c2*[0,w]
+    c1, c2 = convert(T, 1 / sqrt(n)), convert(T, lambda)
+    if intercept
+        ∇g[1] = sum(r) * c1
+        ∇g_w = view(∇g, 2:length(∇g))
+        mul!(∇g_w, A', r)           # = [1ᵀr; Aᵀr]
+        axpby!(c2, w, -c1, ∇g_w)    # = -c1*[1ᵀr; Aᵀr] + c2*[0,w]
+    else
+        mul!(∇g, A', r)             # = Aᵀr
+        axpby!(c2, w, -c1, ∇g)      # = -c1*Aᵀrₘ + c2*w
+    end
 
     return nothing
 end
@@ -75,35 +105,37 @@ end
 Evaluate the penalized least squares criterion. Also updates the gradient.
 This assumes that projections have been handled externally.
 """
-function __evaluate_objective__(problem, rho, extras)
-    @unpack res, grad = problem
+function __evaluate_objective__(problem, lambda, rho, extras)
+    @unpack res, grad, intercept = problem
     r, q, ∇g = res.main, res.dist, grad
+    _, w = get_params(problem)
 
     __evaluate_residuals__(problem, extras, true, true)
-    __evaluate_gradient__(problem, rho, extras)
+    __evaluate_gradient__(problem, lambda, rho, extras)
 
-    loss = dot(r, r) # 1/n * ∑ᵢ (zᵢ - X*β)²
-    dist = dot(q, q) # ∑ⱼ (P(βₘ) - β)²
+    risk = dot(r, r)                    # R = 1/n * |zₘ - X*βₘ|²
+    loss = risk + lambda * dot(w, w)    # L = R + λ|wₘ|²
+    dist = dot(q, q)                    # ∑ⱼ (P(βₘ) - βₘ)²
+    objv = 1//2 * (loss + rho * dist)
     gradsq = dot(∇g, ∇g)
-    obj = 1//2 * (loss + rho * dist)
 
-    return IterationResult(loss, obj, dist, gradsq)
+    return IterationResult(loss, objv, dist, gradsq)
 end
 
 function __evaluate_reg_objective__(problem, lambda, extras)
-    @unpack coeff, res, grad = problem
-    β, r, ∇g = coeff, res.main, grad
-    T = floattype(problem)
+    @unpack coeff, res, grad, intercept = problem
+    r, ∇g = res.main, grad
+    _, w = get_params(problem)
 
     __evaluate_residuals__(problem, extras, true, false)
     __evaluate_reg_gradient__(problem, lambda, extras)
 
-    loss = dot(r, r) # 1/n * ∑ᵢ (zᵢ - X*β)²
+    risk = dot(r, r)                    # R = 1/n * |zₘ - X*βₘ|²
+    loss = risk + lambda * dot(w, w)    # L = R + λ|wₘ|²
+    objv = 1//2 * loss
     gradsq = dot(∇g, ∇g)
-    penalty = dot(β, β)
-    objective = 1//2 * (loss + lambda * penalty)
 
-    return IterationResult(loss, objective, 0.0, gradsq)
+    return IterationResult(loss, objv, zero(risk), gradsq)
 end
 
 """
@@ -134,20 +166,20 @@ sparsity_to_k(problem::AbstractSVM, s) = __sparsity_to_k__(problem.kernel, probl
 __sparsity_to_k__(::Nothing, problem::AbstractSVM, s) = round(Int, (1-s) * problem.p)
 __sparsity_to_k__(::Kernel, problem::AbstractSVM, s) = round(Int, (1-s) * problem.n)
 
-get_projection_indices(problem::AbstractSVM) = __get_projection_indices__(problem.kernel, problem)
-__get_projection_indices__(::Nothing, problem::AbstractSVM) = 1:problem.p
-__get_projection_indices__(::Kernel, problem::AbstractSVM) = 1:problem.n
+get_projection_indices(problem::AbstractSVM) = __get_projection_indices__(problem.kernel, problem.n, problem.p, problem.intercept)
+__get_projection_indices__(::Nothing, n, p, intercept) = ifelse(intercept, 2:p, 1:p)
+__get_projection_indices__(::Kernel, n, p, intercept) = ifelse(intercept, 2:n, 1:n)
 
 """
 Apply a projection to model coefficients.
 """
 function apply_projection(projection, problem, k)
-    idx = get_projection_indices(problem)
     @unpack coeff, proj = problem
     copyto!(proj, coeff)
 
     # projection step, might not be unique
     if problem.intercept
+        idx = get_projection_indices(problem)
         projection(view(proj, idx), k)
     else
         projection(proj, k)
@@ -203,7 +235,7 @@ end
 function set_initial_coefficients!(problem::BinarySVMProblem, v::Real)
     array = problem.coeff_prev
     idx = if problem.intercept
-        1:length(array)-1
+        2:length(array)
     else
         1:length(array)
     end
