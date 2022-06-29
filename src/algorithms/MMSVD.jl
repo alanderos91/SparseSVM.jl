@@ -5,7 +5,7 @@ struct MMSVD <: AbstractMMAlg end
 
 # Initialize data structures.
 function __mm_init__(::MMSVD, problem::BinarySVMProblem, ::Nothing)
-    @unpack n, p, y, intercept, kernel = problem
+    @unpack n, p, kernel = problem
     A = get_design_matrix(problem)
     nparams = ifelse(kernel isa Nothing, p, n)
 
@@ -14,8 +14,7 @@ function __mm_init__(::MMSVD, problem::BinarySVMProblem, ::Nothing)
     r = length(s) # number of nonzero singular values
 
     # constants
-    Abar = vec(sum(A, dims=1))
-    ldiv!(n, Abar)
+    Abar = vec(mean(A, dims=1))
     
     # worker arrays
     z = similar(A, n)
@@ -106,68 +105,75 @@ end
 
 # Apply one update.
 function __mm_iterate__(::MMSVD, problem::BinarySVMProblem, lambda, rho, k, extras)
-    @unpack n, intercept = problem
-    @unpack y, coeff, proj = problem
-    @unpack buffer, projection = extras
-    @unpack z, Ψ, U, s, V, Abar = extras
-
-    A = get_design_matrix(problem)
-    _, w = get_params(problem)
-    T = floattype(problem)    
-
-    # need to compute z via residuals...
-    apply_projection(projection, problem, k)
-    __evaluate_residuals__(problem, extras, true, false)
+    n = problem.n
+    T = floattype(problem)
     c1, c2, c3 = convert(T, 1/n), convert(T, rho), convert(T, lambda)
     
-    # compute RHS: 1/n * Aᵀzₘ + ρ * P(wₘ)
-    idx = get_projection_indices(problem)
-    u = view(proj, idx)
-    mul!(u, A', z, c1, c2)
+    f = function(problem, extras)
+        A = get_design_matrix(problem)
 
-    # Apply the MM update to coefficients: H*w = RHS
-    H = (c2+c3, V, Ψ)
-    __apply_H_inverse__!(w, H, u, buffer, zero(T))
+        # LHS: H = A'A + λI; pass as (γ, V, Ψ) which computes H⁻¹ = γ[I - V Ψ Vᵀ]
+        H = (c2+c3, extras.V, extras.Ψ)
 
-    # Apply Schur complement in H to compute intercept and shift coefficients.
-    if intercept
-        v = sum(z) / n
-        t = 1 - __H_inverse_quadratic__(H, Abar, buffer)
-        b = v / t - dot(Abar, w)
-        __apply_H_inverse__!(w, H, Abar, buffer, (b-v)/t)
-        coeff[1] = b
+        # RHS: u = 1/n * Aᵀzₘ + ρ * P(wₘ)
+        _, u = get_params_proj(problem)
+        mul!(u, A', extras.z, c1, c2)
+
+        return H, u
     end
+
+    apply_projection(extras.projection, problem, k)
+    __evaluate_residuals__(problem, extras, true, false)
+    __linear_solve_SVD__(f, problem, extras)
 
     return nothing
 end
 
 # Apply one update in reguarlized problem.
 function __reg_iterate__(::MMSVD, problem::BinarySVMProblem, lambda, extras)
+    n = problem.n
+    T = floattype(problem)
+    c1, c3 = convert(T, 1/n), convert(T, lambda)
+
+    f = function(problem, extras)
+        A = get_design_matrix(problem)
+
+        # LHS: H = A'A + λI; pass as (γ, V, Ψ) which computes H⁻¹ = γ[I - V Ψ Vᵀ]
+        H = (c3, extras.V, extras.Ψ)
+
+        # RHS: u = 1/n * Aᵀzₘ
+        _, u = get_params_proj(problem)
+        fill!(u, 0)
+        mul!(u, A', extras.z, c1, zero(c1))
+
+        return H, u
+    end
+
+    __evaluate_residuals__(problem, extras, true, false)
+    __linear_solve_SVD__(f, problem, extras)
+
+    return nothing
+end
+
+#
+#   NOTE: worker arrays must not be aliased with coefficients, w!!!
+#
+function __linear_solve_SVD__(compute_LHS_and_RHS::Function, problem::BinarySVMProblem, extras)
     @unpack n, intercept = problem
     @unpack y, coeff, proj = problem
     @unpack buffer = extras
     @unpack z, V, Ψ, Abar = extras
 
-    A = get_design_matrix(problem)
     _, w = get_params(problem)
     T = floattype(problem)    
-
-    # need to compute z via residuals...
-    __evaluate_residuals__(problem, extras, true, false)
-    c1, c3 = convert(T, 1/n), convert(T, lambda)
-
-    # compute RHS: 1/n * Aᵀzₘ
-    _, u = get_params_proj(problem)
-    fill!(u, 0)
-    mul!(u, A', z, c1, zero(c1))
+    H, u = compute_LHS_and_RHS(problem, extras)
 
     # Apply the MM update to coefficients: H*w = RHS
-    H = (c3, V, Ψ)
     __apply_H_inverse__!(w, H, u, buffer, zero(T))
 
     # Apply Schur complement in H to compute intercept and shift coefficients.
     if intercept
-        v = sum(z) / n
+        v = mean(z)
         t = 1 - __H_inverse_quadratic__(H, Abar, buffer)
         b = (v - dot(Abar, w)) / t
         __apply_H_inverse__!(w, H, Abar, buffer, -b)
