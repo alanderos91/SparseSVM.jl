@@ -166,24 +166,14 @@ sparsity_to_k(problem::AbstractSVM, s) = __sparsity_to_k__(problem.kernel, probl
 __sparsity_to_k__(::Nothing, problem::AbstractSVM, s) = round(Int, (1-s) * problem.p)
 __sparsity_to_k__(::Kernel, problem::AbstractSVM, s) = round(Int, (1-s) * problem.n)
 
-get_projection_indices(problem::AbstractSVM) = __get_projection_indices__(problem.kernel, problem.n, problem.p, problem.intercept)
-__get_projection_indices__(::Nothing, n, p, intercept) = ifelse(intercept, 2:p, 1:p)
-__get_projection_indices__(::Kernel, n, p, intercept) = ifelse(intercept, 2:n, 1:n)
-
 """
 Apply a projection to model coefficients.
 """
 function apply_projection(projection, problem, k)
     @unpack coeff, proj = problem
     copyto!(proj, coeff)
-
-    # projection step, might not be unique
-    if problem.intercept
-        idx = get_projection_indices(problem)
-        projection(view(proj, idx), k)
-    else
-        projection(proj, k)
-    end
+    _, p = get_params_proj(problem)
+    projection(p, k)
 
     return proj
 end
