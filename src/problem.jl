@@ -24,7 +24,7 @@ alloc_coefficients(::Kernel, data, n, p, intercept) = similar(data, intercept+n)
 alloc_coefficients(::Nothing, data, n, p, nsvms, intercept) = similar(data, intercept+p, nsvms)
 alloc_coefficients(::Kernel, data, n, p, nsvms, intercept) = similar(data, intercept+n, nsvms)
 
-get_coefficients_view(::Nothing, data, arr::Matrix, n, k, intercept) = view(arr, :, k)
+get_coefficients_view(::Union{Nothing,Kernel}, data, arr::Matrix, n, k, intercept) = view(arr, :, k)
 
 function get_coefficients_view(::Kernel, data, arr::VectorOfVectors, n, k, intercept)
     push!(arr, similar(data, intercept+n))
@@ -337,6 +337,27 @@ function __classify__(problem::BinarySVMProblem, y::AbstractVector)
     return label
 end
 
+"""
+Retrieve indices for support vectors of the binary SVM.
+
+- In the linear case, a point ``x_{i}`` is a support vector if ``max\\{0, 1 - y_{i} f(x_{i})\\} > 0``.
+- In the nonlinear case, a point ``x_{i}`` is a support vector if its coefficient ``\\alpha_{i} > 0``.  
+"""
+function support_vectors(problem::BinarySVMProblem)
+    @unpack y, proj, kernel = problem
+    yhat = SparseSVM.predict(problem, problem.X)
+    __support_vectors__(kernel, y, yhat, proj)
+end
+
+function __support_vectors__(::Nothing, y, yhat, coeff)
+    slack = map(i -> max(0, 1 - y[i]*yhat[i]), eachindex(y))
+    return findall(>(0), slack)
+end
+
+function __support_vectors__(::Kernel, y, yhat, coeff)
+    return findall(>(0), coeff)
+end
+
 struct MultiSVMProblem{T,S,BSVMT,dataT,kernT,stratT,encT,coeffT} <: AbstractSVM
     n::Int # number of samples
     p::Int # number of predictors/features
@@ -518,6 +539,19 @@ get_params_prev(problem::MultiSVMProblem) = __slope_and_coeff_views__(problem.co
 Access projected model parameters (intercept + coefficients).
 """
 get_params_proj(problem::MultiSVMProblem) = __slope_and_coeff_views__(problem.proj, problem.intercept)
+
+"""
+Retrieve indices for support vectors of the multiclass SVM.
+    
+This is taken as the union of support indices for every binary SVM in the multiclass reduction. 
+"""
+function support_vectors(problem::MultiSVMProblem)
+    support_idx = Int[]
+    for binary_svm in problem.svm
+        union!(support_idx, support_vectors(binary_svm))
+    end
+    return support_idx
+end
 
 """
     change_data(problem::BinarySVMProblem, labels::AbstractVector, data)
