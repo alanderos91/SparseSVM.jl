@@ -62,7 +62,8 @@ end
 
 function __slope_and_coeff_views__(arr::VectorOfVectors, intercept)
     len = length(arr)
-    b, w = __slope_and_coeff_views__(arr[1], intercept)
+    b_1, w_1 = __slope_and_coeff_views__(arr[1], intercept)
+    b, w = [b_1], [w_1]
     for k in 2:len
         b_k, w_k = __slope_and_coeff_views__(arr[k], intercept)
         push!(b, b_k)
