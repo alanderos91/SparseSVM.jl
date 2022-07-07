@@ -400,6 +400,7 @@ function init!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda, _ext
     gtol::Real=DEFAULT_GTOL,
     nesterov_threshold::Int=10,
     verbose::Bool=false,
+    cb::Function=DEFAULT_CALLBACK,
     )
     # Check for missing data structures.
     extras = __mm_init__(algorithm, problem, _extras_)
@@ -415,6 +416,7 @@ function init!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda, _ext
 
     # Check initial values for loss, objective, distance, and norm of gradient.
     result = __evaluate_reg_objective__(problem, lambda, extras)
+    cb(0, problem, lambda, 0, result)
     old = result.objective
 
     if sqrt(result.gradient) < gtol
@@ -433,6 +435,8 @@ function init!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda, _ext
 
         # Update loss, objective, and gradient.
         result = __evaluate_reg_objective__(problem, lambda, extras)
+
+        cb(iter, problem, lambda, 0, result)
 
         if verbose
             @printf("\n%4d\t%4.3e\t%4.3e\t%4.3e", iter, result.loss, result.objective, sqrt(result.gradient))
