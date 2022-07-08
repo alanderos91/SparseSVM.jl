@@ -1,6 +1,4 @@
 module SparseSVM
-using ArraysOfArrays: VectorOfVectors
-using DataFrames: copy, copyto!
 using DataDeps, CSV, DataFrames, CodecZlib
 using MLDataUtils
 using KernelFunctions, LinearAlgebra
@@ -8,10 +6,12 @@ using Random, Statistics, StatsBase, StableRNGs
 using Polyester, Parameters
 using Printf, ProgressMeter
 
+using DataFrames: copy, copyto!
+using ArraysOfArrays: VectorOfVectors
+
 import Base: show, getproperty
 import MLDataUtils: poslabel, neglabel, classify
 import StatsBase: fit, transform!, reconstruct!
-import CUDA
 
 ##### DATA #####
 
