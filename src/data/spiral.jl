@@ -6,50 +6,63 @@ register(DataDep(
     Dataset: spiral
     Credit: https://smorbieu.gitlab.io/generate-datasets-to-understand-some-clustering-algorithms-behavior/
 
-    A simulated dataset of three noisy spirals.
+    A simulated dataset of three noisy spirals. Bayes error is approximately 0%.
 
     Observations: 1000
     Features:     2
     Classes:      3
     """,
-    "script", # nothing to download
-    "51d3cf8d223edcacb65db752ff3b0487722951b6e00cb566c3e41a574189c20e";
+    "spiral", # nothing to download
+    "f69c1ca22b338e7df6cd8501bca2bfafa65c65a79b2a16568a60f9b2bea848bc";
     fetch_method=function(unused, localdir)
-        # Parameters
-        N           = 1000
-        max_A       = 600
-        max_B       = 300
-        max_C       = N - max_A - max_B
-        max_radius  = 7.0
-        x0          = -3.5
-        y0          = 3.5
-        angle_start = π / 8
-        seed        = 1903
+        rng = StableRNG(1903)
+        L, X = spiral((600, 300, 100);
+            rng=rng,
+            max_radius=7.0,
+            x0=-3.5,
+            y0=3.5,
+            angle_start=pi/8,
+            prob=1.0,
+        )
 
-        # Simulate the data.
-        rng = MersenneTwister(seed)
-        target, x, y = Vector{Char}(undef, N), zeros(N), zeros(N)
-        for i in 1:N
-        if i ≤ max_A
-            (class, k, n, θ) = ('A', i, max_A, angle_start)
-            noise = 0.1
-        elseif i ≤ max_A + max_B
-            (class, k, n, θ) = ('B', i-max_A+1, max_B, angle_start + 2π/3)
-            noise = 0.2
-        else
-            (class, k, n, θ) = ('C', i-max_A-max_B+1, max_C, angle_start + 4π/3)
-            noise = 0.3
-        end
-        # Compute coordinates.
-        angle = θ + π * k / n
-        radius = max_radius * (1 - k / (n + n / 5))
-
-        target[i] = class
-        x[i] = x0 + radius*cos(angle) + noise*randn(rng)
-        y[i] = y0 + radius*sin(angle) + noise*randn(rng)
-        end
+        x, y = view(X, :, 1), view(X, :, 2)
         local_file = joinpath(localdir, "data.csv")
-        df = DataFrame(target=target, x1=x, x2=y)
+        df = DataFrame(target=L, x1=x, x2=y)
+        perm = Random.randperm(rng, size(df, 1))
+        foreach(col -> permute!(col, perm), eachcol(df))
+        CSV.write(local_file, df)
+        return local_file
+    end
+))
+
+register(DataDep(
+    "spiral-be=0.1",
+    """
+    Dataset: spiral-be=0.1
+    Credit: https://smorbieu.gitlab.io/generate-datasets-to-understand-some-clustering-algorithms-behavior/
+
+    A simulated dataset of three noisy spirals. Bayes error is approximately 10%.
+
+    Observations: 1000
+    Features:     2
+    Classes:      3
+    """,
+    "spiral-be=0.1", # nothing to download
+    "8ea571992e2c21b10d6ef6ed9f8ab15c6df0cba2b27324f28a10535848f4ca5f";
+    fetch_method=function(unused, localdir)
+        rng = StableRNG(1903)
+        L, X = spiral((600, 300, 100);
+            rng=rng,
+            max_radius=7.0,
+            x0=-3.5,
+            y0=3.5,
+            angle_start=pi/8,
+            prob=0.9,
+        )
+
+        x, y = view(X, :, 1), view(X, :, 2)
+        local_file = joinpath(localdir, "data.csv")
+        df = DataFrame(target=L, x1=x, x2=y)
         perm = Random.randperm(rng, size(df, 1))
         foreach(col -> permute!(col, perm), eachcol(df))
         CSV.write(local_file, df)

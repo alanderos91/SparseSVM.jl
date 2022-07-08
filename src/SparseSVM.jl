@@ -22,6 +22,8 @@ Inspired by UCIData.jl: https://github.com/JackDunnNZ/UCIData.jl
 
 const DATA_DIR = joinpath(@__DIR__, "data")
 
+include("simulation.jl")
+
 """
 `list_datasets()`
 
