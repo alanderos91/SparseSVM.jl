@@ -350,8 +350,32 @@ function support_vectors(problem::BinarySVMProblem)
 end
 
 function __support_vectors__(::Nothing, y, yhat, coeff)
-    slack = map(i -> max(0, 1 - y[i]*yhat[i]), eachindex(y))
-    return findall(>(0), slack)
+    # determine scale of values
+    scale_min, scale_max = Inf, -Inf
+    for i in eachindex(y)
+        z = y[i] * yhat[i]
+        absz = abs(z)
+        if absz > 0
+            scale_min = min(scale_min, absz)
+            scale_max = max(scale_max, absz)
+        end
+    end
+    tol = sqrt(eps() / min(1, scale_min))
+
+    margin_sv = Int[]
+    nonmargin_sv = Int[]
+    for i in eachindex(y)
+        z = y[i]*yhat[i]
+        on_margin = abs(1-z) / scale_max <= tol
+        slack = max(0, 1-z)
+        positive_slack = slack > 0
+        if positive_slack # non-margin support vectors
+            push!(nonmargin_sv, i)
+        elseif on_margin # margin support vectors
+            push!(margin_sv, i)
+        end
+    end
+    return sort!(union!(margin_sv, nonmargin_sv))
 end
 
 function __support_vectors__(::Kernel, y, yhat, coeff)
