@@ -143,7 +143,7 @@ function __evaluate_gradient__(problem, lambda, rho, extras)
     _, ∇g_w = __slope_and_coeff_views__(∇g, intercept)
 
     if intercept
-        __set_intercept_component__!(∇g, -sum(r) * c1)
+        __set_intercept_component__!(∇g, sum(r))
     end
 
     mul!(∇g_w, A', r)
@@ -162,7 +162,7 @@ function __evaluate_reg_gradient__(problem, lambda, extras)
     T = SparseSVM.floattype(problem)
 
     # ∇gᵨ(β ∣ βₘ) = -c1*[1ᵀr; Aᵀr] + c2*[0,w]
-    c1, c2 = convert(T, 1 / sqrt(n)), convert(T, lambda)
+    c1, c3 = convert(T, 1 / sqrt(n)), convert(T, lambda)
     _, ∇g_w = __slope_and_coeff_views__(∇g, intercept)
 
     if intercept
@@ -170,7 +170,7 @@ function __evaluate_reg_gradient__(problem, lambda, extras)
     end
 
     mul!(∇g_w, A', r)           # = [1ᵀr; Aᵀr]
-    axpby!(c2, w, -c1, ∇g_w)    # = -c1*[1ᵀr; Aᵀr] + c2*[0,w]
+    axpby!(c3, w, -c1, ∇g_w)    # = -c1*[1ᵀr; Aᵀr] + c2*[0,w]
 
     return nothing
 end

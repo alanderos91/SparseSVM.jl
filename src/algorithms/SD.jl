@@ -71,19 +71,20 @@ function __steepest_descent__(problem, extras, alpha, gamma)
     A∇g_w = res.main
     T = floattype(problem)
 
-    ∂g_b, ∇g_w = __slope_and_coeff_views__(∇g, intercept)
-    if intercept
-        intercept_term = ∂g_b^2 + 2*∂g_b * dot(Abar, ∇g_w)
-    else
-        intercept_term = zero(T)
-    end
-
     # Find optimal step size
+    ∂g_b, ∇g_w = __slope_and_coeff_views__(∇g, intercept)
     mul!(A∇g_w, A, ∇g_w)
-    ∇gnorm2 = dot(∇g_w, ∇g_w)
-    A∇gnorm2 = alpha * dot(A∇g_w, A∇g_w) + gamma * ∇gnorm2 + intercept_term
-    indeterminate = iszero(∇gnorm2) && iszero(A∇gnorm2)
-    t = ifelse(indeterminate, zero(T), ∇gnorm2 / A∇gnorm2)
+    ∇g_w_norm2 = dot(∇g_w, ∇g_w)
+    A∇g_w_norm2 = alpha * dot(A∇g_w, A∇g_w) + gamma * ∇g_w_norm2
+    if intercept
+        numerator = ∇g_w_norm2 + ∂g_b^2
+        denominator = A∇g_w_norm2 + ∂g_b^2 + 2*∂g_b * dot(Abar, ∇g_w)
+    else
+        numerator = ∇g_w_norm2
+        denominator = A∇g_w_norm2
+    end
+    indeterminate = iszero(numerator) && iszero(denominator)
+    t = ifelse(indeterminate, zero(T), numerator / denominator)
 
     # Move in the direction of steepest descent.
     axpy!(-t, ∇g, β)
