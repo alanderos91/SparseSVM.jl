@@ -37,7 +37,6 @@ Same as `fit(algorithm, problem, s)`, but with preallocated data structures in `
 - `rho_init`: The initial value for `rho` (default=1.0).
 - `rho_max`: The maximum value for `rho` (default=1e8).
 - `rhof`: A function `rhof(rho, iter, rho_max)` used to determine the next value for `rho` in the annealing sequence. The default multiplies `rho` by `1.2`.
-- `verbose`: Print convergence information (default=`false`).
 - `cb`: A callback function for extending functionality.
 
 See also: [`SparseSVM.anneal!`](@ref) for additional keyword arguments applied at the annealing step.
@@ -51,7 +50,6 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
     rho_init::Real=1.0,
     rho_max::Real=1e8,
     rhof::Function=DEFAULT_ANNEALING,
-    verbose::Bool=false,
     cb::Function=DEFAULT_CALLBACK,
     kwargs...)
     # Check for missing data structures.
@@ -63,7 +61,7 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
     @unpack coeff, coeff_prev, proj = problem
     @unpack projection = extras
     
-    # Fix model size(s).
+    # Fix model size.
     k = sparsity_to_k(problem, s)
 
     # Use previous estimates in case of warm start.
@@ -78,22 +76,18 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
 
     # Check initial values for loss, objective, distance, and norm of gradient.
     apply_projection(projection, problem, k)
-    init_result = __evaluate_objective__(problem, lambda, rho, extras)
-    result = SubproblemResult(0, init_result)
-    cb(0, problem, rho, k, result)
-    old = sqrt(result.distance)
+    state = __evaluate_objective__(problem, lambda, rho, extras)
+    old = state.distance
 
     for iter in 1:nouter
         # Solve minimization problem for fixed rho.
-        result = SparseSVM.anneal!(algorithm, problem, lambda, rho, s, extras, (false,true,); verbose=verbose, cb=cb, kwargs...)
+        (inner_iters, state) = SparseSVM.anneal!(algorithm, problem, lambda, rho, s, extras, (false,true,); cb=cb, kwargs...)
 
         # Update total iteration count.
-        iters += result.iters
-
-        cb(iter, problem, rho, k, result)
+        iters += inner_iters
 
         # Check for convergence to constrained solution.
-        dist = sqrt(result.distance)
+        dist = state.distance
         if dist < dtol || abs(dist - old) < rtol * (1 + old)
             break
         else
@@ -106,17 +100,9 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
     
     # Project solution to the constraint set.
     apply_projection(projection, problem, k)
-    loss, obj, dist, gradsq = __evaluate_objective__(problem, lambda, rho, extras)
+    state = __evaluate_objective__(problem, lambda, rho, extras)
 
-    if verbose
-        print("\n\niters = ", iters)
-        print("\n1/n ∑ᵢ max{0, 1 - yᵢ xᵢᵀ β}² = ", loss)
-        print("\nobjective  = ", obj)
-        print("\ndistance   = ", sqrt(dist))
-        println("\n|gradient| = ", sqrt(gradsq))
-    end
-
-    return SubproblemResult(iters, loss, obj, dist, gradsq)
+    return (iters, state)
 end
 
 function fit!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda::Real, s::Real,
@@ -128,33 +114,22 @@ function fit!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda::Real, 
         error("Detected missing data structures for algorithm $(algorithm).")
     end
     
-    n = length(problem.svm)
-    total_iter, total_loss, total_objv, total_dist, total_grad = 0, 0.0, 0.0, 0.0, 0.0
-
     # Create closure to fit a particular SVM.
     function __fit__!(k)
         svm = problem.svm[k]
-        r = SparseSVM.fit!(algorithm, svm, lambda, s, extras[k], update_extras; kwargs...)
-
-        i, l, o, d, g = r
-        total_iter += i
-        total_loss += l
-        total_objv += o
-        total_dist += d
-        total_grad += g
-        return r
+        return SparseSVM.fit!(algorithm, svm, lambda, s, extras[k], update_extras; kwargs...)
     end
 
     # Fit each SVM to build the classifier.
+    n = length(problem.svm)
     result = __fit__!(1)
     results = [result]
     for k in 2:n
         result = __fit__!(k)
         push!(results, result)
     end
-    total = SubproblemResult(total_iter, IterationResult(total_loss, total_objv, total_dist, total_grad))
 
-    return (; total=total, result=results)
+    return results
 end
 
 """
@@ -185,7 +160,6 @@ Same as `anneal(algorithm, problem, rho, s)`, but with preallocated data structu
 - `ninner`: The maximum number of iterations (default=`10^4`).
 - `gtol`: An absoluate tolerance parameter on the squared Euclidean norm of the gradient (default=`1e-6`).
 - `nesterov_threshold`: The number of early iterations before applying Nesterov acceleration (default=`10`).
-- `verbose`: Print convergence information (default=`false`).
 - `cb`: A callback function for extending functionality.
 """
 function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real, rho::Real, s::Real,
@@ -194,7 +168,6 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Re
     ninner::Int=10^4,
     gtol::Real=DEFAULT_GTOL,
     nesterov_threshold::Int=10,
-    verbose::Bool=false,
     cb::Function=DEFAULT_CALLBACK,
     kwargs...
     )
@@ -207,8 +180,9 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Re
     @unpack coeff, coeff_prev, proj = problem
     @unpack projection = extras
 
-    # Fix model size(s).
+    # Fix model size(s) and hyperparameters.
     k = sparsity_to_k(problem, s)
+    hyperparams = (;lambda=lambda, rho=rho, k=k,)
 
     # Use previous estimates in case of warm start.
     copyto!(coeff, coeff_prev)
@@ -219,18 +193,17 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Re
 
     # Check initial values for loss, objective, distance, and norm of gradient.
     apply_projection(projection, problem, k)
-    result = __evaluate_objective__(problem, lambda, rho, extras)
-    cb(0, problem, rho, k, result)
-    old = result.objective
+    state = __evaluate_objective__(problem, lambda, rho, extras)
+    cb(0, problem, hyperparams, state)
+    old = state.objective
 
-    if sqrt(result.gradient) < gtol
-        return SubproblemResult(0, result)
+    if state.gradient < gtol
+        return (0, state)
     end
 
     # Initialize iteration counts.
     iters = 0
     nesterov_iter = 1
-    verbose && @printf("\n%-5s\t%-8s\t%-8s\t%-8s\t%-8s\t%-8s", "iter.", "loss", "objective", "distance", "|gradient|", "rho")
     for iter in 1:ninner
         iters += 1
 
@@ -239,17 +212,13 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Re
 
         # Update loss, objective, distance, and gradient.
         apply_projection(projection, problem, k)
-        result = __evaluate_objective__(problem, lambda, rho, extras)
+        state = __evaluate_objective__(problem, lambda, rho, extras)
 
-        cb(iter, problem, rho, k, result)
-
-        if verbose
-            @printf("\n%4d\t%4.3e\t%4.3e\t%4.3e\t%4.3e\t%4.3e", iter, result.loss, result.objective, sqrt(result.distance), sqrt(result.gradient), rho)
-        end
+        cb(iter, problem, hyperparams, state)
 
         # Assess convergence.
-        obj = result.objective
-        if sqrt(result.gradient) < gtol
+        obj = state.objective
+        if state.gradient < gtol
             break
         elseif iter < ninner
             needs_reset = iter < nesterov_threshold || obj > old
@@ -257,10 +226,11 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Re
             old = obj
         end
     end
+
     # Save parameter estimates in case of warm start.
     copyto!(coeff_prev, coeff)
 
-    return SubproblemResult(iters, result)
+    return (iters, state)
 end
 
 function fit(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real; kwargs...)
@@ -269,7 +239,7 @@ function fit(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real; 
 end
 
 """
-```fit(algorithm, problem, lambda, [_extras_]; [maxiter=10^3], [gtol=1e-6], [nesterov_threshold=10], [verbose=false])```
+```fit(algorithm, problem, lambda, [_extras_]; [maxiter=10^3], [gtol=1e-6], [nesterov_threshold=10])```
 
 Fit a SVM using the L2-loss / L2-regularization model.
 """
@@ -279,13 +249,15 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
     maxiter::Int=10^3,
     gtol::Real=DEFAULT_GTOL,
     nesterov_threshold::Int=10,
-    verbose::Bool=false,
     cb::Function=DEFAULT_CALLBACK,
     )
     # Check for missing data structures.
     if extras isa Nothing
         error("Detected missing data structures for algorithm $(algorithm).")
     end
+
+    # Fix hyperparameters.
+    hyperparams = (;lambda=lambda, rho=zero(lambda), k=length(problem.coeff)-problem.intercept,)
 
     # Get problem info and extra data structures.
     @unpack coeff, coeff_prev, proj = problem
@@ -297,18 +269,17 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
     copyto!(coeff, coeff_prev)
 
     # Check initial values for loss, objective, distance, and norm of gradient.
-    result = __evaluate_reg_objective__(problem, lambda, extras)
-    cb(0, problem, lambda, 0, result)
-    old = result.objective
+    state = __evaluate_reg_objective__(problem, lambda, extras)
+    cb(0, problem, hyperparams, state)
+    old = state.objective
 
-    if sqrt(result.gradient) < gtol
-        return SubproblemResult(0, result)
+    if state.gradient < gtol
+        return (0, state)
     end
 
     # Initialize iteration counts.
     iters = 0
     nesterov_iter = 1
-    verbose && @printf("\n%-5s\t%-8s\t%-8s\t%-8s", "iter.", "loss", "objective", "|gradient|")
     for iter in 1:maxiter
         iters += 1
 
@@ -316,17 +287,13 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
         __reg_iterate__(algorithm, problem, lambda, extras)
 
         # Update loss, objective, and gradient.
-        result = __evaluate_reg_objective__(problem, lambda, extras)
+        state = __evaluate_reg_objective__(problem, lambda, extras)
 
-        cb(iter, problem, lambda, 0, result)
-
-        if verbose
-            @printf("\n%4d\t%4.3e\t%4.3e\t%4.3e", iter, result.loss, result.objective, sqrt(result.gradient))
-        end
+        cb(iter, problem, hyperparams, state)
 
         # Assess convergence.
-        obj = result.objective
-        if sqrt(result.gradient) < gtol
+        obj = state.objective
+        if state.gradient < gtol
             break
         elseif iter < maxiter
             needs_reset = iter < nesterov_threshold || obj > old
@@ -334,13 +301,12 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
             old = obj
         end
     end
-    if verbose print("\n\n") end
 
     # Save parameter estimates in case of warm start.
     copyto!(coeff_prev, coeff)
     copyto!(proj, coeff)
 
-    return SubproblemResult(iters, result)
+    return (iters, state)
 end
 
 function fit(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda::Real; kwargs...)
@@ -356,32 +322,21 @@ function fit!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda::Real,
     if extras isa Nothing
         error("Detected missing data structures for algorithm $(algorithm).")
     end
-
-    n = length(problem.svm)
-    total_iter, total_loss, total_objv, total_dist, total_grad = 0, 0.0, 0.0, 0.0, 0.0
     
     # Create closure to fit a particular SVM.
     function __fit__!(k)
         svm = problem.svm[k]
-        r = SparseSVM.fit!(algorithm, svm, lambda, extras[k], update_extras; kwargs...)
-
-        i, l, o, d, g = r
-        total_iter += i
-        total_loss += l
-        total_objv += o
-        total_dist += d
-        total_grad += g
-        return r
+        return SparseSVM.fit!(algorithm, svm, lambda, extras[k], update_extras; kwargs...)
     end
 
     # Fit each SVM to build the classifier.
+    n = length(problem.svm)
     result = __fit__!(1)
     results = [result]
     for k in 2:n
         result = __fit__!(k)
         push!(results, result)
     end
-    total = SubproblemResult(total_iter, IterationResult(total_loss, total_objv, total_dist, total_grad))
 
-    return (; total=total, result=results)
+    return results
 end

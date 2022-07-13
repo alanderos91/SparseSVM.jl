@@ -187,13 +187,14 @@ function __evaluate_objective__(problem, lambda, rho, extras)
     __evaluate_residuals__(problem, extras, true, true)
     __evaluate_gradient__(problem, lambda, rho, extras)
 
-    risk = dot(r, r)                    # R = 1/n * |zₘ - X*βₘ|²
-    loss = risk + lambda * dot(w, w)    # L = R + λ|wₘ|²
-    dist = dot(q, q)                    # ∑ⱼ (P(βₘ) - βₘ)²
-    objv = 1//2 * (loss + rho * dist)
+    risk = dot(r, r)                        # R = 1/n * |zₘ - X*βₘ|²
+    wnorm2 = dot(w, w)
+    loss = 1//2 * (risk + lambda * wnorm2)  # L = R + λ|wₘ|²
+    distsq = dot(q, q)                      # ∑ⱼ (P(βₘ) - βₘ)²
+    objv = loss + 1//2 * rho * distsq
     gradsq = dot(∇g, ∇g)
 
-    return IterationResult(loss, objv, dist, gradsq)
+    return (; risk=risk, loss=loss, objective=objv, wnorm=sqrt(wnorm2), gradient=sqrt(gradsq), distance=sqrt(distsq))
 end
 
 function __evaluate_reg_objective__(problem, lambda, extras)
@@ -204,12 +205,13 @@ function __evaluate_reg_objective__(problem, lambda, extras)
     __evaluate_residuals__(problem, extras, true, false)
     __evaluate_reg_gradient__(problem, lambda, extras)
 
-    risk = dot(r, r)                    # R = 1/n * |zₘ - X*βₘ|²
-    loss = risk + lambda * dot(w, w)    # L = R + λ|wₘ|²
-    objv = 1//2 * loss
+    risk = dot(r, r)                        # R = 1/n * |zₘ - X*βₘ|²
+    wnorm2 = dot(w, w)
+    loss = 1//2 * (risk + lambda * wnorm2)  # L = R + λ|wₘ|²
+    objv = loss
     gradsq = dot(∇g, ∇g)
 
-    return IterationResult(loss, objv, zero(risk), gradsq)
+    return (; risk=risk, loss=loss, objective=objv, wnorm=sqrt(wnorm2), gradient=sqrt(gradsq), distance=zero(gradsq))
 end
 
 """
@@ -316,42 +318,19 @@ end
 """
 Placeholder for callbacks in main functions.
 """
-__do_nothing_callback__(iter, problem, rho, k, history) = nothing
+__do_nothing_callback__(iter, problem, hyperparams, state) = nothing
 # __do_nothing_callback__(fold, problem, train_problem, data, lambda, sparsity, model_size, result) = nothing
+
+function verbose_cb(iter, problem, hyperparams, state, every=1)
+    if iter == 0
+        @printf("\n%-5s\t%-8s\t%-8s\t%-8s\t%-8s\t%-12s\t%-8s\t%-8s\n", "iter", "rho", "risk", "loss", "objective", "1/|w|", "|gradient|", "distance")
+    end
+    if iter % every == 0
+        @printf("%4d\t%4.3e\t%4.3e\t%4.3e\t%4.3e\t%8.3e\t%4.3e\t%4.3e\n", iter, hyperparams.rho, state.risk, state.loss, state.objective, 1/(state.wnorm), state.gradient, state.distance)
+    end
+
+    return nothing
+end
 
 __svd_wrapper__(A::StridedMatrix) = svd(A, full=false)
 __svd_wrapper__(A::AbstractMatrix) = svd!(copy(A), full=false)
-
-struct IterationResult
-    loss::Float64
-    objective::Float64
-    distance::Float64
-    gradient::Float64
-end
-
-# destructuring
-Base.iterate(r::IterationResult) = (r.loss, Val(:objective))
-Base.iterate(r::IterationResult, ::Val{:objective}) = (r.objective, Val(:distance))
-Base.iterate(r::IterationResult, ::Val{:distance}) = (r.distance, Val(:gradient))
-Base.iterate(r::IterationResult, ::Val{:gradient}) = (r.gradient, Val(:done))
-Base.iterate(r::IterationResult, ::Val{:done}) = nothing
-
-struct SubproblemResult
-    iters::Int
-    loss::Float64
-    objective::Float64
-    distance::Float64
-    gradient::Float64
-end
-
-function SubproblemResult(iters, r::IterationResult)
-    return SubproblemResult(iters, r.loss, r.objective, r.distance, r.gradient)
-end
-
-# destructuring
-Base.iterate(r::SubproblemResult) = (r.iters, Val(:loss))
-Base.iterate(r::SubproblemResult, ::Val{:loss}) = (r.loss, Val(:objective))
-Base.iterate(r::SubproblemResult, ::Val{:objective}) = (r.objective, Val(:distance))
-Base.iterate(r::SubproblemResult, ::Val{:distance}) = (r.distance, Val(:gradient))
-Base.iterate(r::SubproblemResult, ::Val{:gradient}) = (r.gradient, Val(:done))
-Base.iterate(r::SubproblemResult, ::Val{:done}) = nothing
