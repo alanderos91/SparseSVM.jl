@@ -66,6 +66,14 @@ function cv(algorithm::AbstractMMAlg, problem, grids::G, dataset_split::Tuple{S1
         train=alloc_score_arrays(ns, nl, nfolds),
         validation=alloc_score_arrays(ns, nl, nfolds),
         test=alloc_score_arrays(ns, nl, nfolds),
+        iters=alloc_score_arrays(ns, nl, nfolds),
+        risk=alloc_score_arrays(ns, nl, nfolds),
+        loss=alloc_score_arrays(ns, nl, nfolds),
+        objective=alloc_score_arrays(ns, nl, nfolds),
+        gradient=alloc_score_arrays(ns, nl, nfolds),
+        wnorm=alloc_score_arrays(ns, nl, nfolds),
+        distance=alloc_score_arrays(ns, nl, nfolds),
+        ncoeff=alloc_score_arrays(ns, nl, nfolds),
         time=alloc_score_arrays(ns, nl, nfolds),
     )
 
@@ -83,7 +91,7 @@ function cv(algorithm::AbstractMMAlg, problem, grids::G, dataset_split::Tuple{S1
 
         # Standardize ALL data based on the training set.
         # Adjustment of transformation is to detect NaNs, Infs, and zeros in transform parameters that will corrupt data, and handle them gracefully if possible.
-        F = StatsBase.fit(Transform, train_X, dims=1)
+        F = StatsBase.fit(data_transform, train_X, dims=1)
         __adjust_transform__(F)
         foreach(X -> StatsBase.transform!(F, X), (train_X, val_X, test_X))
         
@@ -98,14 +106,35 @@ function cv(algorithm::AbstractMMAlg, problem, grids::G, dataset_split::Tuple{S1
             for (i, s) in enumerate(sparsity_grid)
                 # Obtain solution as function of s.
                 if s != 0.0
-                    result.time[k][i,j] = @elapsed SparseSVM.fit!(algorithm, train_problem, lambda, s, extras, (true, false,);
+                    timed_result = @timed SparseSVM.fit!(algorithm, train_problem, lambda, s, extras, (true, false,);
                         cb=cb, kwargs...
                     )
                 else# s == 0
-                    result.time[k][i,j] = @elapsed SparseSVM.init!(algorithm, train_problem, lambda, extras;
+                    timed_result = @timed SparseSVM.fit!(algorithm, train_problem, lambda, extras;
                         maxiter=maxiter, gtol=tol, nesterov_threshold=0,
                     )
                 end
+
+                measured_time = timed_result.time # seconds
+                statistics = timed_result.value
+                for field in (:risk, :loss, :objective, :gradient, :wnorm, :distance)
+                    arr = getfield(result, field)
+                    if problem isa BinarySVMProblem
+                        # Single SVM: use the reported values
+                        val = getfield(statistics, field)
+                    else
+                        # Otherwise, report average across all SVMs
+                        val = mean(x -> getfield(last(x), field), statistics)
+                    end
+                    arr[k][i,j] = val
+                end
+                if problem isa BinarySVMProblem
+                    result.iters[k][i,j] = statistics[1]
+                else
+                    result.iters[k][i,j] = mean(x -> first(x), statistics)
+                end
+                result.ncoeff[k][i,j] = SparseSVM.sparsity_to_k(train_problem, s)
+                result.time[k][i,j] = measured_time
     
                 # Evaluate the solution.
                 r = scoref(train_problem, (train_Y, train_X), (val_Y, val_X), (test_Y, test_X))
@@ -146,8 +175,8 @@ function repeated_cv(algorithm::AbstractMMAlg, problem, grids::G, dataset_split:
     end
 
     # Replicate CV procedure several times.
-    keys = (:train,:validation,:test,:time)
-    types = NTuple{4,Vector{Vector{Float64}}}
+    keys = (:train,:validation,:test,:iters,:risk,:loss,:objective,:gradient,:wnorm,:distance,:ncoeff,:time)
+    types = NTuple{12,Vector{Matrix{Float64}}}
     replicate = Vector{NamedTuple{keys,types}}(undef, nreplicates)
 
     for rep in 1:nreplicates
