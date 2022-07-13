@@ -78,7 +78,7 @@ function __steepest_descent__(problem, extras, alpha, gamma)
     A∇g_w_norm2 = alpha * dot(A∇g_w, A∇g_w) + gamma * ∇g_w_norm2
     if intercept
         numerator = ∇g_w_norm2 + ∂g_b^2
-        denominator = A∇g_w_norm2 + ∂g_b^2 + 2*∂g_b * dot(Abar, ∇g_w)
+        denominator = A∇g_w_norm2 + ∂g_b^2 + 2*∂g_b * BLAS.dot(Abar, ∇g_w)
     else
         numerator = ∇g_w_norm2
         denominator = A∇g_w_norm2

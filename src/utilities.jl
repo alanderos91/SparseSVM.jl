@@ -334,3 +334,39 @@ end
 
 __svd_wrapper__(A::StridedMatrix) = svd(A, full=false)
 __svd_wrapper__(A::AbstractMatrix) = svd!(copy(A), full=false)
+
+function __adjust_transform__(F::ZScoreTransform)
+    has_nan = any(isnan, F.scale) || any(isnan, F.mean)
+    has_inf = any(isinf, F.scale) || any(isinf, F.mean)
+    has_zero = any(iszero, F.scale)
+    if has_nan
+        error("Detected NaN in z-score.")
+    elseif has_inf
+        error("Detected Inf in z-score.")
+    elseif has_zero
+        for idx in eachindex(F.scale)
+            x = F.scale[idx]
+            F.scale[idx] = ifelse(iszero(x), one(x), x)
+        end
+    end
+    return F
+end
+
+function __adjust_transform__(F::NormalizationTransform)
+    has_nan = any(isnan, F.norms)
+    has_inf = any(isinf, F.norms)
+    has_zero = any(iszero, F.norms)
+    if has_nan
+        error("Detected NaN in norms.")
+    elseif has_inf
+        error("Detected Inf in norms.")
+    elseif has_zero
+        for idx in eachindex(F.norms)
+            x = F.norms[idx]
+            F.norms[idx] = ifelse(iszero(x), one(x), x)
+        end
+    end
+    return F
+end
+
+__adjust_transform__(F::NoTransformation) = F

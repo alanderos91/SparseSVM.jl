@@ -23,25 +23,6 @@ end
 
 """
     fit(NormalizationTransform, X; dims=nothing, center=true, scale=true)
-Fit standardization parameters to vector or matrix `X`
-and return a `NormalizationTransform` transformation object.
-# Keyword arguments
-* `dims`: if `1` fit normalization parameters in column-wise fashion;
-  if `2` fit in row-wise fashion. The default is `nothing`, which is equivalent to `dims=2` with a deprecation warning.
-# Examples
-```jldoctest
-julia> using StatsBase
-julia> X = [0.0 -0.5 0.5; 0.0 1.0 2.0]
-2×3 Matrix{Float64}:
- 0.0  -0.5  0.5
- 0.0   1.0  2.0
-julia> dt = fit(NormalizationTransform, X, dims=2)
-NormalizationTransform{Float64}(2, 2, [0.7071067811865476, 2.23606797749979])
-julia> StatsBase.transform(dt, X)
-2×3 Matrix{Float64}:
- 0.0  -0.707107  0.707107
- 0.0   0.447214  0.894427
-```
 """
 function StatsBase.fit(::Type{NormalizationTransform}, X::AbstractMatrix{<:Real};
         dims::Union{Integer,Nothing}=nothing)
@@ -114,5 +95,41 @@ function reconstruct!(x::AbstractMatrix{<:Real}, t::NormalizationTransform, y::A
         t_ = NormalizationTransform(t.len, 1, t.norms)
         reconstruct!(x', t_, y')
     end
+    return x
+end
+
+"""
+NoTransformation
+"""
+struct NoTransformation{T<:Real} <: StatsBase.AbstractDataTransform end
+
+"""
+    fit(NoTransformation, X; dims=nothing)
+"""
+function StatsBase.fit(::Type{NoTransformation}, X::AbstractMatrix{<:Real};
+        dims::Union{Integer,Nothing}=nothing)
+    if dims === nothing
+        Base.depwarn("fit(t, x) is deprecated: use fit(t, x, dims=2) instead", :fit)
+    end
+    T = eltype(X)
+    return NoTransformation{T}()
+end
+
+function StatsBase.fit(::Type{NoTransformation}, X::AbstractVector{<:Real};
+        dims::Integer=1)
+    if dims != 1
+        throw(DomainError(dims, "fit only accepts dims=1 over a vector. Try fit(t, x, dims=1)."))
+    end
+    T = eltype(X)
+    return NoTransformation{T}()
+end
+
+function StatsBase.transform!(y::AbstractMatrix{<:Real}, t::NoTransformation, x::AbstractMatrix{<:Real})
+    copyto!(y, x)
+    return y
+end
+
+function StatsBase.reconstruct!(x::AbstractMatrix{<:Real}, t::NoTransformation, y::AbstractMatrix{<:Real})
+    copyto!(x, y)
     return x
 end

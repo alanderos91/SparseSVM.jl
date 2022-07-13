@@ -98,6 +98,7 @@ function process_dataset(input_df::DataFrame;
 end
 
 include("problem.jl")
+include("transform.jl")
 include("utilities.jl")
 include("projections.jl")
 
@@ -129,11 +130,10 @@ const DEFAULT_RTOL = 1e-6
 
 include("fit.jl")
 include("cv.jl")
-include("transform.jl")
 
 export MultiClassStrategy, OVO, OVR
 export BinarySVMProblem, MultiSVMProblem
 export MMSVD, SD
-export ZScoreTransform, NormalizationTransform
+export ZScoreTransform, NormalizationTransform, NoTransformation
 
 end # end module

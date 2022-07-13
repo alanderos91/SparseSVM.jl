@@ -44,7 +44,8 @@ function cv(algorithm::AbstractMMAlg, problem, grids::G, dataset_split::Tuple{S1
     scoref::Function=DEFAULT_SCORE_FUNCTION,
     cb::Function=DEFAULT_CALLBACK,
     show_progress::Bool=true,
-    kwargs...) where {G,S1,S2}
+    data_transform::Type{Transform}=ZScoreTransform,
+    kwargs...) where {G,S1,S2,Transform}
     # Sanity checks.
     if length(grids) != 2
         error("Argument 'grids' should contain two collections representing sparsity and lambda values, respectively.")
@@ -81,21 +82,9 @@ function cv(algorithm::AbstractMMAlg, problem, grids::G, dataset_split::Tuple{S1
         test_Y, test_X = getobs(test_set, obsdim=1)
 
         # Standardize ALL data based on the training set.
-        F = StatsBase.fit(ZScoreTransform, train_X, dims=1)
-        has_nan = any(isnan, F.scale) || any(isnan, F.mean)
-        has_inf = any(isinf, F.scale) || any(isinf, F.mean)
-        has_zero = any(iszero, F.scale)
-        if has_nan
-            error("Detected NaN in z-score.")
-        elseif has_inf
-            error("Detected Inf in z-score.")
-        elseif has_zero
-            for idx in eachindex(F.scale)
-                x = F.scale[idx]
-                F.scale[idx] = ifelse(iszero(x), one(x), x)
-            end
-        end
-
+        # Adjustment of transformation is to detect NaNs, Infs, and zeros in transform parameters that will corrupt data, and handle them gracefully if possible.
+        F = StatsBase.fit(Transform, train_X, dims=1)
+        __adjust_transform__(F)
         foreach(X -> StatsBase.transform!(F, X), (train_X, val_X, test_X))
         
         # Create a problem object for the training set.

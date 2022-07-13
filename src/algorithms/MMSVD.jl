@@ -8,24 +8,25 @@ function __mm_init__(::MMSVD, problem::BinarySVMProblem, ::Nothing)
     @unpack n, p, kernel = problem
     A = get_design_matrix(problem)
     nparams = ifelse(kernel isa Nothing, p, n)
+    T = floattype(problem)
 
     # thin SVD of A
-    U, s, V = __svd_wrapper__(A)
-    r = length(s) # number of nonzero singular values
+    F = __svd_wrapper__(A)
+    r = length(F.S) # number of nonzero singular values
 
     # constants
     Abar = vec(mean(A, dims=1))
     
     # worker arrays
-    z = similar(A, n)
-    buffer = similar(A, r)
+    z = similar(A, n); fill!(z, zero(T))
+    buffer = similar(A, r); fill!(buffer, zero(T))
     
     # diagonal matrices
-    Ψ = Diagonal(similar(A, r))
+    Ψ = Diagonal(similar(A, r)); fill!(Ψ.diag, zero(T))
 
     return (;
         projection=L0Projection(nparams),
-        U=U, s=s, V=V,
+        U=F.U, s=F.S, V=Matrix(F.V),
         z=z, Ψ=Ψ, Abar=Abar,
         buffer=buffer,
     )
@@ -45,7 +46,6 @@ __mm_update_sparsity__(::MMSVD, problem::BinarySVMProblem, lambda, rho, k, extra
 
 # Update data structures due to changing rho.
 __mm_update_rho__(::MMSVD, problem::BinarySVMProblem, lambda, rho, k, extras) = update_diagonal(problem, lambda, rho, extras)
-# __mm_update_rho__(::MMSVD, problem::BinarySVMProblem, rho, k, extras) = update_matrices(problem, rho, extras)
 
 # Update data structures due to changing lambda. 
 __mm_update_lambda__(::MMSVD, problem::BinarySVMProblem, lambda, extras) = update_diagonal(problem, lambda, zero(lambda), extras)
@@ -54,23 +54,22 @@ function update_diagonal(problem::BinarySVMProblem, lambda, rho, extras)
     @unpack s, Ψ = extras
     n, _, _ = probdims(problem)
     T = floattype(problem)
-    a², b², c² = convert(T, 1/n), convert(T, rho), convert(T, lambda)
+    a, b, c = convert(T, 1/n), convert(T, rho), convert(T, lambda)
 
     # Update the diagonal matrix Ψ = (a² Σ²) / (a² Σ² + b² I).
-    __update_diagonal__(Ψ.diag, s, a², b², c²)
+    __update_diagonal__(Ψ.diag, s, a, b, c)
 
     return nothing
 end
 
-function __update_diagonal__(diag, s, a², b², c²)
-    for i in eachindex(diag)
-        sᵢ² = s[i]^2
-        diag[i] = a² * sᵢ² / (a² * sᵢ² + b² + c²)
+function __update_diagonal__(diag, s, a, b, c)
+    @inbounds for i in eachindex(diag)
+        s2_i = s[i]^2
+        diag[i] = a * s2_i / (a * s2_i + b + c)
     end
 end
 
 # solves (A'A + γ*I) x = b using thin SVD of A
-# x = γ*[I - V * Ψ * Vᵀ]*b
 function __apply_H_inverse__!(x, H, b, buffer, α::Real=zero(eltype(x)))
     γ, V, Ψ = H
 
@@ -79,7 +78,7 @@ function __apply_H_inverse__!(x, H, b, buffer, α::Real=zero(eltype(x)))
         BLAS.scal!(1/γ, x)
         α = one(γ)
     else                # x = x + α * H⁻¹ b
-        axpy!(α/γ, b, x)
+        BLAS.axpy!(α/γ, b, x)
     end
 
     # accumulate Ψ * Vᵀ * b
@@ -100,7 +99,7 @@ function __H_inverse_quadratic__(H, x, buffer)
         buffer[i] = sqrt(Ψ.diag[i]) * buffer[i]
     end
 
-    return 1/γ * (dot(x, x) - dot(buffer, buffer))
+    return 1/γ * (BLAS.dot(x, x) - BLAS.dot(buffer, buffer))
 end
 
 # Apply one update.
@@ -135,18 +134,20 @@ function __reg_iterate__(::MMSVD, problem::BinarySVMProblem, lambda, extras)
     T = floattype(problem)
     c1, c3 = convert(T, 1/n), convert(T, lambda)
 
-    f = function(problem, extras)
-        A = get_design_matrix(problem)
+    f = let c1=c1, c3=c3
+        function(problem, extras)
+            A = get_design_matrix(problem)
 
-        # LHS: H = A'A + λI; pass as (γ, V, Ψ) which computes H⁻¹ = γ[I - V Ψ Vᵀ]
-        H = (c3, extras.V, extras.Ψ)
+            # LHS: H = A'A + λI; pass as (γ, V, Ψ) which computes H⁻¹ = γ[I - V Ψ Vᵀ]
+            H = (c3, extras.V, extras.Ψ)
 
         # RHS: u = 1/n * Aᵀzₘ
         _, u = get_params_proj(problem)
         fill!(u, 0)
         mul!(u, A', extras.z, c1, zero(c1))
 
-        return H, u
+            return H, u
+        end
     end
 
     __evaluate_residuals__(problem, extras, true, false)
