@@ -6,7 +6,7 @@ register(DataDep(
     Dataset: spiral
     Credit: https://smorbieu.gitlab.io/generate-datasets-to-understand-some-clustering-algorithms-behavior/
 
-    A simulated dataset of three noisy spirals. Bayes error is approximately 0%.
+    A simulated dataset of three noisy spirals.
 
     Observations: 1000
     Features:     2
