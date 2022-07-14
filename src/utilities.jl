@@ -254,6 +254,13 @@ function apply_projection(projection, problem, k)
     return proj
 end
 
+struct GeometricProression <: Function
+    multiplier::Float64
+end
+
+function (f::GeometricProression)(rho, iter, rho_max)
+    convert(typeof(rho), min(rho_max, rho * f.multiplier))
+end
 """
 Define a geometric progression recursively by the rule
 ```
@@ -261,8 +268,8 @@ Define a geometric progression recursively by the rule
 ```
 The result is guaranteed to have type `typeof(rho)`.
 """
-function geometric_progression(rho, iter, rho_max, multiplier::Real=1.2)
-    return convert(typeof(rho), min(rho_max, rho * multiplier))
+function geometric_progression(multiplier::Real=1.2)
+    return GeometricProression(multiplier)
 end
 
 convert_labels(model::BinarySVMProblem, L) = map(Li -> MLDataUtils.convertlabel(model.ovr_encoding, Li, model.ovr_encoding), L)
