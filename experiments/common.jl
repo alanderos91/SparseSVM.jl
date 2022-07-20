@@ -1,73 +1,38 @@
-using SparseSVM, MLDataUtils, KernelFunctions, LinearAlgebra
-using CSV, DataFrames, Random, StableRNGs, Statistics
-using Dates, DelimitedFiles, ProgressMeter
+using SparseSVM, KernelFunctions, Statistics, LinearAlgebra, StatsBase, MLDataUtils
+using CSV, DataFrames, Random, StableRNGs
+using Logging
+
+using SparseSVM: CVStatisticsCallback, RepeatedCVCallback, extract_cv_data
+
+function create_classifier(::Type{BinarySVMProblem}, labeled_data, svm_kwargs)
+    L, X = labeled_data
+    positive_label = unique(L) |> sort |> first |> string
+    problem = BinarySVMProblem(string.(L), X, positive_label; svm_kwargs...)
+    foreach(arr -> fill!(arr, 0), (problem.coeff, problem.coeff_prev, problem.proj))
+    return problem
+end
+
+function create_classifier(::Type{MultiSVMProblem}, labeled_data, svm_kwargs)
+    L, X = labeled_data
+    problem = MultiSVMProblem(string.(L), X; svm_kwargs...)
+    for svm in problem.svm
+        foreach(arr -> fill!(arr, 0), (svm.coeff, svm.coeff_prev, svm.proj))
+    end
+    return problem
+end
+
+# See: https://github.com/JuliaLang/julia/issues/27574#issuecomment-397838647
+function dropnames(namedtuple::NamedTuple, names::Tuple{Vararg{Symbol}}) 
+    keepnames = Base.diff_names(Base._nt_names(namedtuple), names)
+   return NamedTuple{keepnames}(namedtuple)
+end
 
 ##### Make sure we set up BLAS threads correctly #####
-BLAS.set_num_threads(8)
-
-##### handle filenames #####
-function generate_filename(experiment, algorithm)
-    return string(experiment,
-        "-", Dates.format(now(), dateformat"yyyymmdd-HHMMSS"),
-        "-algorithm=", string(algorithm),
-    )
-end
-
-##### Define special type for selecting different algorithms #####
-@enum AlgOption SD=1 MM=2
-
-function get_algorithm_func(opt::AlgOption)
-    if opt == SD
-        return sparse_steepest!
-    elseif opt == MM
-        return sparse_direct!
-    else
-        error("Unknown option $(opt)")
-    end
-end
-
-##### wrappers for creating a classifier object #####
-make_classifier(::Type{C}, X, targets, refclass; kwargs...) where C<:MultiClassifier = C(X, targets; kwargs...)
-make_classifier(::Type{C}, X, targets, refclass; strategy::MultiClassStrategy=OVR(), kwargs...) where C<:BinaryClassifier = C(X, targets, refclass; kwargs...)
-
-##### initializing model parameters #####
-function initialize_weights!(classifier::BinaryClassifier, A::AbstractMatrix)
-    y = classifier.data.y
-    weights = classifier.weights
-    intercept = classifier.intercept
-    SparseSVM._init_weights_!(weights, A, y, intercept)
-
-    # sanity checks
-    if any(isnan, weights)
-        error("Detected NaNs in computing univariate initial guess.")
-    end
-    
-    return nothing
-end
-
-function initialize_weights!(classifier::MultiClassifier, A::Vector)
-    svm = classifier.svm
-    for i in eachindex(svm)
-        initialize_weights!(svm[i], A[i])
-    end
-    return nothing
-end
-
-function randomize_weights!(classifier::BinaryClassifier, rng)
-    Random.randn!(rng, classifier.weights)
-    return nothing
-end
-
-function randomize_weights!(classifier::MultiClassifier, rng)
-    foreach(svm -> randomize_weights!(svm, rng), classifier.svm)
-end
+BLAS.set_num_threads(10)
 
 ##### performance metrics #####
 
-function accuracy_score(classifier, X, targets)
-    predictions = classifier(X)
-    return mean(predictions .== targets)
-end
+prediction_accuracy(problem, L, X) = mean(SparseSVM.classify(problem, X) .== L)
 
 mse(x, y) = mean( (x - y) .^ 2 )
 
@@ -82,25 +47,62 @@ function discovery_metrics(x, y)
     return (TP, FP, TN, FN)
 end
 
-##### standardization #####
+##### misc #####
+nonzero_coeff_indices(arr::AbstractVector) = findall(!iszero, arr) |> sort!
 
-function _rescale_!(::Val{:none}, X)
-    X
+function nonzero_coeff_indices(arr::AbstractMatrix)
+    idx = Int[]
+    foreach(coeff -> union!(idx, nonzero_coeff_indices(coeff)), eachcol(arr))
+    sort!(idx)
 end
 
-function _rescale_!(::Val{:zscore}, X) # [-1, 1]
-    rescale!(X, obsdim=1)
+function nonzero_coeff_indices(arr::Union{SparseSVM.VectorOfVectors,AbstractVector{<:AbstractVector}})
+    idx = Int[]
+    foreach(coeff -> union!(idx, nonzero_coeff_indices(coeff)), arr)
+    sort!(idx)
 end
 
-function _rescale_!(::Val{:minmax}, X) # [0, 1]
-    xmin = minimum(X, dims=2)
-    xmax = maximum(X, dims=2)
-    @. X = (X - xmin) / (xmax - xmin)
+extract_reduced_subset(problem) = extract_reduced_subset(problem.kernel, problem)
+
+function extract_reduced_subset(::Nothing, problem)
+    _, coeffs = SparseSVM.get_params_proj(problem)
+    return nonzero_coeff_indices(coeffs)
 end
 
-# other utils
+function extract_reduced_subset(::Kernel, problem)
+    return SparseSVM.support_vectors(problem)
+end
 
-function cleanup_precompile(dataset, fname)
-    rm(joinpath("results", dataset, "$(fname).out"))
-    rm(joinpath("results", dataset, "$(fname).log"))
+match_problem_dimensions(problem, data, idx, training_data) = match_problem_dimensions(problem.kernel, data, idx, training_data)
+
+function match_problem_dimensions(::Nothing, data, idx, training_data)
+    L, X = data
+    return (L, X[:, idx])
+end
+
+function match_problem_dimensions(::Kernel, data, idx, training_data)
+    L, X = data
+    if training_data
+        return L[idx], X[idx, :]
+    else
+        L, X
+    end
+end
+
+function extract_iters_and_stats(result::Tuple)
+    result[1], result[2]
+end
+
+function extract_iters_and_stats(result::Vector)
+    a = mean(first, result)
+    b = (;
+        risk=mean(x -> last(x).risk, result),
+        loss=mean(x -> last(x).loss, result),
+        objective=mean(x -> last(x).objective, result),
+        distance=mean(x -> last(x).distance, result),
+        gradient=mean(x -> last(x).gradient, result),
+        norm=mean(x -> last(x).norm, result),
+    )
+
+    return a, b
 end
