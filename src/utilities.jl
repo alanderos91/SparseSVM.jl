@@ -32,7 +32,7 @@ __coeff_range__(::Val{:last}, nparams) = Base.OneTo(nparams)
 # [b, w] format
 __coeff_range__(::Val{:first}, nparams) = 2:nparams
 
-function __slope_and_coeff_views__(arr::AbstractVector, intercept)
+function __slope_and_coeff_views__(arr::AbstractVector{<:Number}, intercept)
     len = length(arr)
 
     if intercept
@@ -76,12 +76,14 @@ end
 #   Helper functions for evaluating residuals and computing gradients.
 #
 function __predicted_response__!(r, X, b, w)
+    T = eltype(r)
     if iszero(b)
-        mul!(r, X, w)
+        # mul!(r, X, w)
+        BLAS.gemv!('N', one(T), X, w, zero(T), r)
     else
-        T = eltype(r)
         fill!(r, b)
-        mul!(r, X, w, one(T), one(T))
+        # mul!(r, X, w, one(T), one(T))
+        BLAS.gemv!('N', one(T), X, w, one(T), r)
     end
     return nothing
 end
@@ -117,7 +119,7 @@ function __evaluate_residuals__(problem::BinarySVMProblem, extras, need_main::Bo
         c1 = convert(T, 1 / sqrt(n))
         __predicted_response__!(r, A, b, w)
         __shifted_response__!(z, y, r)
-        axpby!(c1, z, -c1, r)
+        BLAS.axpby!(c1, z, -c1, r)
     end
 
     if need_dist # P(βₘ) - β
@@ -146,9 +148,10 @@ function __evaluate_gradient__(problem, lambda, rho, extras)
         __set_intercept_component__!(∇g, sum(r))
     end
 
-    mul!(∇g_w, A', r)
-    axpby!(-c2, q, -c1, ∇g)     # = -c1*[1ᵀr; Aᵀr] - c2*qₘ
-    axpy!(c3, w, ∇g_w)          # + c3*[0,w]
+    # mul!(∇g_w, A', r)
+    BLAS.gemv!('T', one(T), A, r, zero(T), ∇g_w)
+    BLAS.axpby!(-c2, q, -c1, ∇g)     # = -c1*[1ᵀr; Aᵀr] - c2*qₘ
+    BLAS.axpy!(c3, w, ∇g_w)          # + c3*[0,w]
 
     return nothing
 end
@@ -169,8 +172,9 @@ function __evaluate_reg_gradient__(problem, lambda, extras)
         __set_intercept_component__!(∇g, -sum(r) * c1)
     end
 
-    mul!(∇g_w, A', r)           # = [1ᵀr; Aᵀr]
-    axpby!(c3, w, -c1, ∇g_w)    # = -c1*[1ᵀr; Aᵀr] + c2*[0,w]
+    # mul!(∇g_w, A', r)           # = [1ᵀr; Aᵀr]
+    BLAS.gemv!('T', one(T), A, r, zero(T), ∇g_w)
+    BLAS.axpby!(c3, w, -c1, ∇g_w)    # = -c1*[1ᵀr; Aᵀr] + c2*[0,w]
 
     return nothing
 end
@@ -189,12 +193,12 @@ function __evaluate_objective__(problem, lambda, rho, extras)
 
     risk = dot(r, r)                        # R = 1/n * |zₘ - X*βₘ|²
     wnorm2 = dot(w, w)
-    loss = 1//2 * (risk + lambda * wnorm2)  # L = R + λ|wₘ|²
+    loss = 0.5 * (risk + lambda * wnorm2)  # L = R + λ|wₘ|²
     distsq = dot(q, q)                      # ∑ⱼ (P(βₘ) - βₘ)²
-    objv = loss + 1//2 * rho * distsq
+    objv = loss + 0.5 * rho * distsq
     gradsq = dot(∇g, ∇g)
 
-    return (; risk=risk, loss=loss, objective=objv, wnorm=sqrt(wnorm2), gradient=sqrt(gradsq), distance=sqrt(distsq))
+    return (; risk=risk, loss=loss, objective=objv, distance=sqrt(distsq), gradient=sqrt(gradsq), norm=sqrt(wnorm2))
 end
 
 function __evaluate_reg_objective__(problem, lambda, extras)
@@ -207,11 +211,11 @@ function __evaluate_reg_objective__(problem, lambda, extras)
 
     risk = dot(r, r)                        # R = 1/n * |zₘ - X*βₘ|²
     wnorm2 = dot(w, w)
-    loss = 1//2 * (risk + lambda * wnorm2)  # L = R + λ|wₘ|²
+    loss = 0.5 * (risk + lambda * wnorm2)  # L = R + λ|wₘ|²
     objv = loss
     gradsq = dot(∇g, ∇g)
 
-    return (; risk=risk, loss=loss, objective=objv, wnorm=sqrt(wnorm2), gradient=sqrt(gradsq), distance=zero(gradsq))
+    return (; risk=risk, loss=loss, objective=objv, distance=zero(gradsq), gradient=sqrt(gradsq), norm=sqrt(wnorm2))
 end
 
 """
@@ -272,38 +276,16 @@ function geometric_progression(multiplier::Real=1.2)
     return GeometricProression(multiplier)
 end
 
-convert_labels(model::BinarySVMProblem, L) = map(Li -> MLDataUtils.convertlabel(model.ovr_encoding, Li, model.ovr_encoding), L)
-convert_labels(model::MultiSVMProblem, L) = L
-
-function prediction_errors(model, train_set, validation_set, test_set)
-    # Extract data for each set.
-    Tr_Y, Tr_X = train_set
-    V_Y, V_X = validation_set
-    T_Y, T_X = test_set
-
-    # Helper function to make predictions on each subset and evaluate errors.
-    classification_error = function(model, L, X)
-        # Sanity check: Y and X have the same number of rows.
-        length(L) != size(X, 1) && error("Labels ($(length(L))) not compatible with data X ($(size(X))).")
-
-        # Translate data to the model's encoding.
-        L_translated = convert_labels(model, L)
-
-        # Classify response in vertex space; may use @batch.
-        Lhat = SparseSVM.classify(model, X)
-
-        # Sweep through predictions and tally the mistakes.
-        nincorrect = sum(L_translated .!= Lhat)
-
-        return 100 * nincorrect / length(L)
+function convert_labels(problem::BinarySVMProblem, L)
+    ovr_encoding = problem.ovr_encoding
+    new_L = Vector{typeof(poslabel(ovr_encoding))}(undef, length(L))
+    for i in eachindex(L)
+        new_L[i] = MLDataUtils.convertlabel(ovr_encoding, L[i], ovr_encoding)
     end
-
-    Tr = classification_error(model, Tr_Y, Tr_X)
-    V = classification_error(model, V_Y, V_X)
-    T = classification_error(model, T_Y, T_X)
-
-    return (Tr, V, T)
+    return new_L
 end
+
+convert_labels(::MultiSVMProblem, L) = L
 
 function set_initial_coefficients!(problem::BinarySVMProblem, v::Real)
     _, w = get_params_prev(problem)
@@ -311,7 +293,7 @@ function set_initial_coefficients!(problem::BinarySVMProblem, v::Real)
 end
 
 function set_initial_coefficients!(problem::MultiSVMProblem, v::Real)
-    foreach(svm -> set_initial_coefficients!(svm, v), problem.svm)
+    foreach(Base.Fix2(set_initial_coefficients!, v), problem.svm)
 end
 
 function set_initial_coefficients_and_intercept!(problem::BinarySVMProblem, v)
@@ -319,24 +301,7 @@ function set_initial_coefficients_and_intercept!(problem::BinarySVMProblem, v)
 end
 
 function set_initial_coefficients_and_intercept!(problem::MultiSVMProblem, v::Real)
-    foreach(svm -> set_initial_coefficients_and_intercept!(svm, v), problem.svm)
-end
-
-"""
-Placeholder for callbacks in main functions.
-"""
-__do_nothing_callback__(iter, problem, hyperparams, state) = nothing
-# __do_nothing_callback__(fold, problem, train_problem, data, lambda, sparsity, model_size, result) = nothing
-
-function verbose_cb(iter, problem, hyperparams, state, every=1)
-    if iter == 0
-        @printf("\n%-5s\t%-8s\t%-8s\t%-8s\t%-8s\t%-12s\t%-8s\t%-8s\n", "iter", "rho", "risk", "loss", "objective", "1/|w|", "|gradient|", "distance")
-    end
-    if iter % every == 0
-        @printf("%4d\t%4.3e\t%4.3e\t%4.3e\t%4.3e\t%8.3e\t%4.3e\t%4.3e\n", iter, hyperparams.rho, state.risk, state.loss, state.objective, 1/(state.wnorm), state.gradient, state.distance)
-    end
-
-    return nothing
+    foreach(Base.Fix2(set_initial_coefficients_and_intercept!, v), problem.svm)
 end
 
 __svd_wrapper__(A::StridedMatrix) = svd(A, full=false)

@@ -1,28 +1,35 @@
 """
-    fit(algorithm, problem, lambda, s; kwargs...)
+    fit(algorithm, problem::BinarySVMProblem, lambda, sparsity; kwargs...)
 
-Solve optimization problem at sparsity level `s`.
+Solve a classification `problem` at the specified `sparsity` level and regularization strength `lambda`.
 
 The solution is obtained via a proximal distance `algorithm` that gradually anneals parameter estimates
 toward the target sparsity set.
 """
-function fit(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real, s::Real; kwargs...)
+function fit(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real, sparsity::Real; kwargs...)
     extras = __mm_init__(algorithm, problem, nothing) # initialize extra data structures
-    SparseSVM.fit!(algorithm, problem, lambda, s, extras, (true,false,); kwargs...)
-end
-
-function fit(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda::Real, s::Real; kwargs...)
-    extras = [__mm_init__(algorithm, svm, nothing) for svm in problem.svm] # initialize extra data structures
-    SparseSVM.fit!(algorithm, problem, lambda, s, extras, (true,false,); kwargs...)
+    SparseSVM.fit!(algorithm, problem, lambda, sparsity, extras, (true,false,); kwargs...)
 end
 
 """
-    fit!(algorithm, problem, s, [extras], [update_extras]; kwargs...)
+    fit(algorithm, problem::MultiSVMProblem, lambda, sparsity; kwargs...)
 
-Same as `fit(algorithm, problem, s)`, but with preallocated data structures in `extras`.
+Solve a classification with nonbinary labels using multiple SVMs to define a decision boundary.
+
+The same settings (that is, `algorithm`, `sparsity`, `lambda`, ...) are applied to each SVM.
+"""
+function fit(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda::Real, sparsity::Real; kwargs...)
+    extras = [__mm_init__(algorithm, svm, nothing) for svm in problem.svm] # initialize extra data structures
+    SparseSVM.fit!(algorithm, problem, lambda, sparsity, extras, (true,false,); kwargs...)
+end
+
+"""
+    fit!(algorithm, problem, lambda, sparsity, [extras], [update_extras]; kwargs...)
+
+Same as `fit` but with preallocated data structures in `extras`.
 
 !!! Note
-    The caller should specify whether to update data structures depending on `s` and `rho` using `update_extras[1]` and `update_extras[2]`, respectively.
+    The caller should specify whether to update data structures depending on `sparsity` and `rho` using `update_extras[1]` and `update_extras[2]`, respectively.
 
     Convergence is determined based on the rule `dist < dtol || abs(dist - old) < rtol * (1 + old)`, where `dist` is the distance and `dtol` and `rtol` are tolerance parameters.
 
@@ -41,7 +48,7 @@ Same as `fit(algorithm, problem, s)`, but with preallocated data structures in `
 
 See also: [`SparseSVM.anneal!`](@ref) for additional keyword arguments applied at the annealing step.
 """
-function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real, s::Real,
+function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real, sparsity::Real,
     extras::Union{Nothing,NamedTuple}=nothing,
     update_extras::NTuple{2,Bool}=(true,false,);
     nouter::Int=100,
@@ -54,7 +61,7 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
     kwargs...)
     # Check for missing data structures.
     if extras isa Nothing
-        error("Detected missing data structures for algorithm $(algorithm).")
+        error("Detected missing data structures for algorithm ", (typeof(algorithm)), ".")
     end
 
     # Get problem info and extra data structures.
@@ -62,7 +69,7 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
     @unpack projection = extras
     
     # Fix model size.
-    k = sparsity_to_k(problem, s)
+    k = sparsity_to_k(problem, sparsity)
 
     # Use previous estimates in case of warm start.
     copyto!(coeff, coeff_prev)
@@ -78,10 +85,11 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
     apply_projection(projection, problem, k)
     state = __evaluate_objective__(problem, lambda, rho, extras)
     old = state.distance
+    cb((0, state), problem, (;lambda=lambda, rho=rho, k=k,))
 
     for iter in 1:nouter
         # Solve minimization problem for fixed rho.
-        (inner_iters, state) = SparseSVM.anneal!(algorithm, problem, lambda, rho, s, extras, (false,true,); cb=cb, kwargs...)
+        (inner_iters, state) = SparseSVM.anneal!(algorithm, problem, lambda, rho, sparsity, extras, (false,true,); cb=cb, kwargs...)
 
         # Update total iteration count.
         iters += inner_iters
@@ -105,19 +113,20 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
     return (iters, state)
 end
 
-function fit!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda::Real, s::Real,
+function fit!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda::Real, sparsity::Real,
     extras::Union{Nothing,Vector}=nothing,
     update_extras::NTuple{2,Bool}=(true,false,);
     kwargs...)
     # Check for missing data structures.
     if extras isa Nothing
-        error("Detected missing data structures for algorithm $(algorithm).")
+        error("Detected missing data structures for algorithm ", (typeof(algorithm)), ".")
     end
     
     # Create closure to fit a particular SVM.
-    function __fit__!(k)
-        svm = problem.svm[k]
-        return SparseSVM.fit!(algorithm, svm, lambda, s, extras[k], update_extras; kwargs...)
+    __fit__! = let algorithm=algorithm, problem=problem, lambda=lambda, sparsity=sparsity, extras=extras, update_extras=update_extras, kwargs=kwargs
+        function (k)
+            return SparseSVM.fit!(algorithm, problem.svm[k], lambda, sparsity, extras[k], update_extras; kwargs...)
+        end
     end
 
     # Fit each SVM to build the classifier.
@@ -133,19 +142,19 @@ function fit!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda::Real, 
 end
 
 """
-    anneal(algorithm, problem, rho, s; kwargs...)
+    anneal(algorithm, problem, rho, sparsity; kwargs...)
 
-Solve the `rho`-penalized optimization problem at sparsity level `s`.
+Solve the `rho`-penalized optimization problem at sparsity level `sparsity`.
 """
-function anneal(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real, rho::Real, s::Real; kwargs...)
+function anneal(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real, rho::Real, sparsity::Real; kwargs...)
     extras = __mm_init__(algorithm, problem, nothing)
-    SparseSVM.anneal!(algorithm, problem, lambda, rho, s, extras, (true,true,); kwargs...)
+    SparseSVM.anneal!(algorithm, problem, lambda, rho, sparsity, extras, (true,true,); kwargs...)
 end
 
 """
-    anneal!(algorithm, problem, rho, s, [extras], [update_extras]; kwargs...)
+    anneal!(algorithm, problem, rho, sparsity, [extras], [update_extras]; kwargs...)
 
-Same as `anneal(algorithm, problem, rho, s)`, but with preallocated data structures in `extras`.
+Same as `anneal(algorithm, problem, rho, sparsity)`, but with preallocated data structures in `extras`.
 
 !!! Note
     The caller should specify whether to update data structures depending on `s` and `rho` using `update_extras[1]` and `update_extras[2]`, respectively.
@@ -162,7 +171,7 @@ Same as `anneal(algorithm, problem, rho, s)`, but with preallocated data structu
 - `nesterov_threshold`: The number of early iterations before applying Nesterov acceleration (default=`10`).
 - `cb`: A callback function for extending functionality.
 """
-function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real, rho::Real, s::Real,
+function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real, rho::Real, sparsity::Real,
     extras::Union{Nothing,NamedTuple}=nothing,
     update_extras::NTuple{2,Bool}=(true,true);
     ninner::Int=10^4,
@@ -173,7 +182,7 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Re
     )
     # Check for missing data structures.
     if extras isa Nothing
-        error("Detected missing data structures for algorithm $(algorithm).")
+        error("Detected missing data structures for algorithm ", (typeof(algorithm)), ".")
     end
 
     # Get problem info and extra data structures.
@@ -181,7 +190,7 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Re
     @unpack projection = extras
 
     # Fix model size(s) and hyperparameters.
-    k = sparsity_to_k(problem, s)
+    k = sparsity_to_k(problem, sparsity)
     hyperparams = (;lambda=lambda, rho=rho, k=k,)
 
     # Use previous estimates in case of warm start.
@@ -194,7 +203,6 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Re
     # Check initial values for loss, objective, distance, and norm of gradient.
     apply_projection(projection, problem, k)
     state = __evaluate_objective__(problem, lambda, rho, extras)
-    cb(0, problem, hyperparams, state)
     old = state.objective
 
     if state.gradient < gtol
@@ -214,7 +222,7 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Re
         apply_projection(projection, problem, k)
         state = __evaluate_objective__(problem, lambda, rho, extras)
 
-        cb(iter, problem, hyperparams, state)
+        cb((iter, state), problem, hyperparams)
 
         # Assess convergence.
         obj = state.objective
@@ -233,16 +241,16 @@ function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Re
     return (iters, state)
 end
 
+"""
+```fit(algorithm, problem::BinarySVMProblem, lambda, [_extras_]; [maxiter=10^3], [gtol=1e-6], [nesterov_threshold=10])```
+
+Fit a SVM using the L2-loss / L2-regularization model.
+"""
 function fit(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real; kwargs...)
     extras = __mm_init__(algorithm, problem, nothing) # initialize extra data structures
     SparseSVM.fit!(algorithm, problem, lambda, extras, true; kwargs...)
 end
 
-"""
-```fit(algorithm, problem, lambda, [_extras_]; [maxiter=10^3], [gtol=1e-6], [nesterov_threshold=10])```
-
-Fit a SVM using the L2-loss / L2-regularization model.
-"""
 function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
     extras::Union{Nothing,NamedTuple}=nothing,
     update_extras::Bool=true;
@@ -253,7 +261,7 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
     )
     # Check for missing data structures.
     if extras isa Nothing
-        error("Detected missing data structures for algorithm $(algorithm).")
+        error("Detected missing data structures for algorithm ", (typeof(algorithm)), ".")
     end
 
     # Fix hyperparameters.
@@ -270,7 +278,7 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
 
     # Check initial values for loss, objective, distance, and norm of gradient.
     state = __evaluate_reg_objective__(problem, lambda, extras)
-    cb(0, problem, hyperparams, state)
+    cb((0, state), problem, hyperparams)
     old = state.objective
 
     if state.gradient < gtol
@@ -289,7 +297,7 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
         # Update loss, objective, and gradient.
         state = __evaluate_reg_objective__(problem, lambda, extras)
 
-        cb(iter, problem, hyperparams, state)
+        cb((iter, state), problem, hyperparams)
 
         # Assess convergence.
         obj = state.objective
@@ -309,6 +317,11 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
     return (iters, state)
 end
 
+"""
+```fit(algorithm, problem::MultiSVMProblem, lambda, [_extras_]; [maxiter=10^3], [gtol=1e-6], [nesterov_threshold=10])```
+
+Fit multiple SVMs using the L2-loss / L2-regularization model.
+"""
 function fit(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda::Real; kwargs...)
     extras = [__mm_init__(algorithm, svm, nothing) for svm in problem.svm] # initialize extra data structures
     SparseSVM.fit!(algorithm, problem, lambda, extras, true; kwargs...)
@@ -320,13 +333,14 @@ function fit!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda::Real,
     kwargs...)
     # Check for missing data structures.
     if extras isa Nothing
-        error("Detected missing data structures for algorithm $(algorithm).")
+        error("Detected missing data structures for algorithm ", (typeof(algorithm)), ".")
     end
     
     # Create closure to fit a particular SVM.
-    function __fit__!(k)
-        svm = problem.svm[k]
-        return SparseSVM.fit!(algorithm, svm, lambda, extras[k], update_extras; kwargs...)
+    __fit__! = let algorithm=algorithm, problem=problem, lambda=lambda, extras=extras, update_extras=update_extras, kwargs=kwargs
+        function (k)
+            return SparseSVM.fit!(algorithm, problem.svm[k], lambda, extras[k], update_extras; kwargs...)
+        end
     end
 
     # Fit each SVM to build the classifier.

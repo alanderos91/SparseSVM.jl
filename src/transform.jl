@@ -77,7 +77,7 @@ function StatsBase.transform!(y::AbstractMatrix{<:Real}, t::NormalizationTransfo
     return y
 end
 
-function reconstruct!(x::AbstractMatrix{<:Real}, t::NormalizationTransform, y::AbstractMatrix{<:Real})
+function StatsBase.reconstruct!(x::AbstractMatrix{<:Real}, t::NormalizationTransform, y::AbstractMatrix{<:Real})
     if t.dims == 1
         l = t.len
         size(x,2) == size(y,2) == l || throw(DimensionMismatch("Inconsistent dimensions."))

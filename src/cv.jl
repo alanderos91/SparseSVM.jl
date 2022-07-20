@@ -39,49 +39,39 @@ Additional arguments are propagated to `fit` and `anneal`. See also [`SparseSVM.
 """
 function cv(algorithm::AbstractMMAlg, problem, grids::G, dataset_split::Tuple{S1,S2};
     maxiter::Int=10^4,
-    tol::Real=DEFAULT_GTOL,
+    gtol::Real=DEFAULT_GTOL,
     nfolds::Int=5,
     scoref::Function=DEFAULT_SCORE_FUNCTION,
     cb::Function=DEFAULT_CALLBACK,
     show_progress::Bool=true,
+    progress_bar::Progress=Progress(nfolds * length(grids[1]) * length(grids[2]); desc="Running CV w/ $(algorithm)... ", enabled=show_progress),
     data_transform::Type{Transform}=ZScoreTransform,
     kwargs...) where {G,S1,S2,Transform}
     # Sanity checks.
+    not_proportion(x) = x < 0 || x > 1
     if length(grids) != 2
         error("Argument 'grids' should contain two collections representing sparsity and lambda values, respectively.")
     end
     sparsity_grid, lambda_grid = grids
-    if any(x -> x < 0 || x > 1, sparsity_grid)
+    if any(not_proportion, sparsity_grid)
         error("Values in sparsity grid should be in [0,1].")
     end
-    if any(x -> x < 0, lambda_grid)
+    if any(<(0), lambda_grid)
         error("Values in λ grid should be positive.")
     end
 
     # Initialize the output.
     cv_set, test_set = dataset_split
     nl, ns = length(lambda_grid), length(sparsity_grid)
-    alloc_score_arrays(a, b, c) = [Matrix{Float64}(undef, a, b) for _ in 1:c]
+    alloc_score_arrays(a, b, c) = Array{Float64,3}(undef, a, b, c)
     result = (;
         train=alloc_score_arrays(ns, nl, nfolds),
         validation=alloc_score_arrays(ns, nl, nfolds),
         test=alloc_score_arrays(ns, nl, nfolds),
-        iters=alloc_score_arrays(ns, nl, nfolds),
-        risk=alloc_score_arrays(ns, nl, nfolds),
-        loss=alloc_score_arrays(ns, nl, nfolds),
-        objective=alloc_score_arrays(ns, nl, nfolds),
-        gradient=alloc_score_arrays(ns, nl, nfolds),
-        wnorm=alloc_score_arrays(ns, nl, nfolds),
-        distance=alloc_score_arrays(ns, nl, nfolds),
-        ncoeff=alloc_score_arrays(ns, nl, nfolds),
         time=alloc_score_arrays(ns, nl, nfolds),
     )
 
     # Run cross-validation.
-    if show_progress
-        progress_bar = Progress(nfolds * ns * nl, 1, "Running CV w/ $(algorithm)... "; offset=3)
-    end
-
     for (k, fold) in enumerate(kfolds(cv_set, k=nfolds, obsdim=1))
         # Retrieve the training set and validation set.
         train_set, validation_set = fold
@@ -93,7 +83,7 @@ function cv(algorithm::AbstractMMAlg, problem, grids::G, dataset_split::Tuple{S1
         # Adjustment of transformation is to detect NaNs, Infs, and zeros in transform parameters that will corrupt data, and handle them gracefully if possible.
         F = StatsBase.fit(data_transform, train_X, dims=1)
         __adjust_transform__(F)
-        foreach(X -> StatsBase.transform!(F, X), (train_X, val_X, test_X))
+        foreach(Base.Fix1(StatsBase.transform!, F), (train_X, val_X, test_X))
         
         # Create a problem object for the training set.
         train_problem = change_data(problem, train_Y, train_X)
@@ -103,50 +93,34 @@ function cv(algorithm::AbstractMMAlg, problem, grids::G, dataset_split::Tuple{S1
         for (j, lambda) in enumerate(lambda_grid)
             set_initial_coefficients_and_intercept!(train_problem, zero(T))
 
-            for (i, s) in enumerate(sparsity_grid)
-                # Obtain solution as function of s.
-                if s != 0.0
-                    timed_result = @timed SparseSVM.fit!(algorithm, train_problem, lambda, s, extras, (true, false,);
-                        cb=cb, kwargs...
+            for (i, sparsity) in enumerate(sparsity_grid)
+                # Obtain solution as function of sparsity and lambda.
+                if sparsity != 0.0
+                    timed_result = @timed SparseSVM.fit!(algorithm, train_problem, lambda, sparsity, extras, (true, false,);
+                        gtol=gtol, kwargs...
                     )
-                else# s == 0
+                else# sparsity == 0
                     timed_result = @timed SparseSVM.fit!(algorithm, train_problem, lambda, extras;
-                        maxiter=maxiter, gtol=tol, nesterov_threshold=0,
+                        maxiter=maxiter, gtol=gtol,
                     )
                 end
 
+                hyperparams = (;sparsity=sparsity, lambda=lambda,)
+                indices = (;sparsity=i, lambda=j, fold=k,)
                 measured_time = timed_result.time # seconds
+                result.time[i,j,k] = measured_time
                 statistics = timed_result.value
-                for field in (:risk, :loss, :objective, :gradient, :wnorm, :distance)
-                    arr = getfield(result, field)
-                    if problem isa BinarySVMProblem
-                        # Single SVM: use the reported values
-                        val = getfield(statistics, field)
-                    else
-                        # Otherwise, report average across all SVMs
-                        val = mean(x -> getfield(last(x), field), statistics)
-                    end
-                    arr[k][i,j] = val
-                end
-                if problem isa BinarySVMProblem
-                    result.iters[k][i,j] = statistics[1]
-                else
-                    result.iters[k][i,j] = mean(x -> first(x), statistics)
-                end
-                result.ncoeff[k][i,j] = SparseSVM.sparsity_to_k(train_problem, s)
-                result.time[k][i,j] = measured_time
-    
+                cb(statistics, problem, hyperparams, indices)
+
                 # Evaluate the solution.
                 r = scoref(train_problem, (train_Y, train_X), (val_Y, val_X), (test_Y, test_X))
                 for (arr, val) in zip(result, r) # only touches first three arrays
-                    arr[k][i,j] = val
+                    arr[i,j,k] = val
                 end
     
                 # Update the progress bar.
-                if show_progress
-                    spercent = string(round(100*s, digits=6), '%')
-                    next!(progress_bar, showvalues=[(:fold, k), (:lambda, lambda), (:sparsity, spercent)])
-                end
+                spercent = string(round(100*sparsity, digits=4), '%')
+                next!(progress_bar, showvalues=[(:fold, k), (:lambda, lambda), (:sparsity, spercent)])
             end
         end
     end
@@ -163,20 +137,20 @@ function repeated_cv(algorithm::AbstractMMAlg, problem, grids::G; at::Real=0.8, 
 end
 
 function repeated_cv(algorithm::AbstractMMAlg, problem, grids::G, dataset_split::Tuple{S1,S2};
+    nfolds::Int=5,
     nreplicates::Int=10,
     show_progress::Bool=true,
     rng::AbstractRNG=StableRNG(1903),
+    cb::Function=DEFAULT_CALLBACK,
     kwargs...) where {G,S1,S2}
     # Retrieve subsets and create index set into cross-validation set.
     cv_set, test_set = dataset_split
 
-    if show_progress
-        progress_bar = Progress(nreplicates, 1, "Repeated CV... ")
-    end
+    progress_bar = Progress(nreplicates * nfolds * length(grids[1]) * length(grids[2]); desc="Repeated CV... ", enabled=show_progress)
 
     # Replicate CV procedure several times.
-    keys = (:train,:validation,:test,:iters,:risk,:loss,:objective,:gradient,:wnorm,:distance,:ncoeff,:time)
-    types = NTuple{12,Vector{Matrix{Float64}}}
+    keys = (:train,:validation,:test,:time)
+    types = NTuple{4,Array{Float64,3}}
     replicate = Vector{NamedTuple{keys,types}}(undef, nreplicates)
 
     for rep in 1:nreplicates
@@ -184,14 +158,54 @@ function repeated_cv(algorithm::AbstractMMAlg, problem, grids::G, dataset_split:
         cv_shuffled = shuffleobs(cv_set, obsdim=1, rng=rng)
 
         # Run k-fold cross-validation and store results.
+        cb_rep = cb(rep)
         replicate[rep] = SparseSVM.cv(algorithm, problem, grids, (cv_shuffled, test_set);
-            show_progress=show_progress, kwargs...)
-
-        # Update the progress bar.
-        if show_progress
-            next!(progress_bar, showvalues=[(:replicate, rep),])
-        end
+            nfolds=nfolds, show_progress=show_progress, progress_bar=progress_bar, cb=cb_rep, kwargs...)
     end
 
     return replicate
+end
+
+function search_hyperparameters(sparsity_grid, lambda_grid, data;
+        minimize::Bool=true
+    )
+    ns, nl = length(sparsity_grid), length(lambda_grid)
+    if size(data) != (ns, nl)
+        error("Data in NamedTuple is incompatible with ($ns,$nl) grid.")
+    end
+
+    if minimize
+        best_i, best_j, best_triple = 0, 0, (Inf, Inf, Inf)
+    else
+        best_i, best_j, best_triple = 0, 0, (-Inf, -Inf, -Inf)
+    end
+
+    for (j, lambda) in enumerate(lambda_grid), (i, sparsity) in enumerate(sparsity_grid)
+        pair_score = data[i,j]
+
+        # Check if this is the best pair. Rank by pair_score -> sparsity -> lambda.
+        if minimize
+            #
+            #   pair_score: We want to minimize the CV score; e.g. minimum prediction error.
+            #   1-sparsity: higher sparsity => smaller model
+            #   1/lambda: larger lambda => wider margin
+            #
+            proposal = (pair_score, 1-sparsity, 1/lambda)
+            if proposal < best_triple
+                best_i, best_j, best_triple = i, j, proposal
+            end
+        else
+            #
+            #   pair_score: We want to maximize the CV score; e.g. maximum prediction accuracy.
+            #   sparsity: higher sparsity => smaller model
+            #   lambda: larger lambda => wider margin
+            #
+            proposal = (pair_score, sparsity, lambda)
+            if proposal > best_triple
+                best_i, best_j, best_triple = i, j, proposal
+            end
+        end
+    end
+
+    return best_i, best_j, best_triple
 end

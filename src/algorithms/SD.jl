@@ -18,14 +18,8 @@ function __mm_init__(::SD, problem::BinarySVMProblem, ::Nothing)
     return (; projection=L0Projection(nparams), z=z, Abar=Abar,)
 end
 
-# Check for data structure allocations; otherwise initialize.
-function __mm_init__(::SD, problem::BinarySVMProblem, extras)
-    if :projection in keys(extras) && :Z in keys(extras) # TODO
-        return extras
-    else
-        __mm_init__(SD(), problem, nothing)
-    end
-end
+# Assume extras has the correct data structures.
+__mm_init__(::SD, problem::BinarySVMProblem, extras) = extras
 
 # Update data structures due to change in model subsets, k.
 __mm_update_sparsity__(::SD, problem::BinarySVMProblem, lambda, rho, k, extras) = nothing
@@ -73,9 +67,9 @@ function __steepest_descent__(problem, extras, alpha, gamma)
 
     # Find optimal step size
     ∂g_b, ∇g_w = __slope_and_coeff_views__(∇g, intercept)
-    mul!(A∇g_w, A, ∇g_w)
-    ∇g_w_norm2 = dot(∇g_w, ∇g_w)
-    A∇g_w_norm2 = alpha * dot(A∇g_w, A∇g_w) + gamma * ∇g_w_norm2
+    BLAS.gemv!('N', one(T), A, ∇g_w, zero(T), A∇g_w)
+    ∇g_w_norm2 = BLAS.dot(∇g_w, ∇g_w)
+    A∇g_w_norm2 = alpha * BLAS.dot(A∇g_w, A∇g_w) + gamma * ∇g_w_norm2
     if intercept
         numerator = ∇g_w_norm2 + ∂g_b^2
         denominator = A∇g_w_norm2 + ∂g_b^2 + 2*∂g_b * BLAS.dot(Abar, ∇g_w)
@@ -87,5 +81,5 @@ function __steepest_descent__(problem, extras, alpha, gamma)
     t = ifelse(indeterminate, zero(T), numerator / denominator)
 
     # Move in the direction of steepest descent.
-    axpy!(-t, ∇g, β)
+    BLAS.axpy!(-t, ∇g, β)
 end

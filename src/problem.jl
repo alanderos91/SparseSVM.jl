@@ -17,7 +17,12 @@ create_X_and_K(kernel::Kernel, y, data) = (copy(data), rmul!( kernelmatrix(kerne
 
 create_X_and_K(::Nothing, y, data) = (copy(data), nothing)
 
-alloc_targets!(y, l, margin_enc, ovr_enc) = map!(li -> MLDataUtils.convertlabel(margin_enc, li, ovr_enc), y, l)
+function alloc_targets!(y, l, margin_enc, ovr_enc)
+    for i in eachindex(y)
+        y[i] = MLDataUtils.convertlabel(margin_enc, l[i], ovr_enc)
+    end
+    return y
+end
 
 alloc_coefficients(::Nothing, data, n, p, intercept) = similar(data, intercept+p)
 alloc_coefficients(::Kernel, data, n, p, intercept) = similar(data, intercept+n)
@@ -343,13 +348,12 @@ Retrieve indices for support vectors of the binary SVM.
 - In the linear case, a point ``x_{i}`` is a support vector if ``max\\{0, 1 - y_{i} f(x_{i})\\} > 0``.
 - In the nonlinear case, a point ``x_{i}`` is a support vector if its coefficient ``\\alpha_{i} > 0``.  
 """
-function support_vectors(problem::BinarySVMProblem)
-    @unpack y, proj, kernel = problem
-    yhat = SparseSVM.predict(problem, problem.X)
-    __support_vectors__(kernel, y, yhat, proj)
-end
+support_vectors(problem::BinarySVMProblem) = sort!(support_vectors(problem.kernel, problem))
 
-function __support_vectors__(::Nothing, y, yhat, coeff)
+function support_vectors(::Nothing, problem::BinarySVMProblem)
+    y = problem.y
+    yhat = SparseSVM.predict(problem, problem.X)
+
     # determine scale of values
     scale_min, scale_max = Inf, -Inf
     for i in eachindex(y)
@@ -375,11 +379,12 @@ function __support_vectors__(::Nothing, y, yhat, coeff)
             push!(margin_sv, i)
         end
     end
-    return sort!(union!(margin_sv, nonmargin_sv))
+    return union!(margin_sv, nonmargin_sv)
 end
 
-function __support_vectors__(::Kernel, y, yhat, coeff)
-    return findall(>(0), coeff)
+function support_vectors(::Kernel, problem::BinarySVMProblem)
+    _, projected_coefficients = get_params_proj(problem)
+    return findall(!iszero, projected_coefficients)
 end
 
 struct MultiSVMProblem{T,S,BSVMT,dataT,kernT,stratT,encT,coeffT} <: AbstractSVM
@@ -569,10 +574,22 @@ Retrieve indices for support vectors of the multiclass SVM.
     
 This is taken as the union of support indices for every binary SVM in the multiclass reduction. 
 """
-function support_vectors(problem::MultiSVMProblem)
+support_vectors(problem::MultiSVMProblem) = sort!(support_vectors(problem.strategy, problem))
+
+function support_vectors(::OVR, problem::MultiSVMProblem)
     support_idx = Int[]
     for binary_svm in problem.svm
         union!(support_idx, support_vectors(binary_svm))
+    end
+    return support_idx
+end
+
+function support_vectors(::OVO, problem::MultiSVMProblem)
+    support_idx = Int[]
+    for (binary_svm, subset) in zip(problem.svm, problem.subset)
+        svm_idx = support_vectors(binary_svm)
+        idx = view(subset, svm_idx)
+        union!(support_idx, idx)
     end
     return support_idx
 end
@@ -680,22 +697,24 @@ function __change_svm_data__(::OVO, lm, problem, labels, data, coeff, coeff_prev
 end
 
 function __change_svm_data__(::OVR, lm, problem, labels, data, coeff, coeff_prev, proj)
+    has_intercept = all(isequal(1), data[:,end])
+    ls, ds = (labels, data)
+
     # helper function to create an SVM usingn OVR
     instantiate_svm = function(old, i)
         @unpack ovr_encoding = old
         @unpack intercept, kernel = old
     
         T = floattype(old)
-        has_intercept = all(isequal(1), data[:,end])
-        n, p = length(labels), has_intercept ? size(data, 2)-1 : size(data, 2)
+        n, p = length(ls), has_intercept ? size(ds, 2)-1 : size(ds, 2)
         
         # Enforce an encoding using OneVsRest.
         margin_encoding = LabelEnc.MarginBased(T)
-        y = similar(data, n)
-        alloc_targets!(y, labels, margin_encoding, ovr_encoding)
+        y = similar(ds, n)
+        alloc_targets!(y, ls, margin_encoding, ovr_encoding)
 
         # Create design matrices.
-        X, KY = create_X_and_K(kernel, y, data)
+        X, KY = create_X_and_K(kernel, y, ds)
 
         # Assign view of coefficients from parent array.
         cv = get_coefficients_view(kernel, ds, coeff, n, i, intercept)
@@ -703,16 +722,17 @@ function __change_svm_data__(::OVR, lm, problem, labels, data, coeff, coeff_prev
         pv = get_coefficients_view(kernel, ds, proj, n, i, intercept)
         
         # Allocate additional data structures.
-        res = (; main=similar(data, n), dist=similar(cv))
+        res = (; main=similar(ds, n), dist=similar(cv))
         grad = similar(cv)
 
         return BinarySVMProblem{T}(n, p,
             y, X, KY, intercept,
-            labels, ovr_encoding,
+            ls, ovr_encoding,
             kernel, cv, cpv, pv, res, grad,
         )
     end
 
+    idx = collect(eachindex(labels))
     subset = [idx for _ in eachindex(problem.svm)]
     svm = [instantiate_svm(svm, i) for (i, svm) in enumerate(problem.svm)]
 

@@ -101,6 +101,7 @@ include("problem.jl")
 include("transform.jl")
 include("utilities.jl")
 include("projections.jl")
+include("callbacks.jl")
 
 abstract type AbstractMMAlg end
 
@@ -120,7 +121,7 @@ end
 
 const INTERCEPT_INDEX = Val(:last)
 
-const DEFAULT_ANNEALING = geometric_progression
+const DEFAULT_ANNEALING = geometric_progression(1.2) # rho_0 * 1.2^t
 const DEFAULT_CALLBACK = __do_nothing_callback__
 const DEFAULT_SCORE_FUNCTION = prediction_errors
 

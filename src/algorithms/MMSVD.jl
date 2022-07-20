@@ -32,14 +32,8 @@ function __mm_init__(::MMSVD, problem::BinarySVMProblem, ::Nothing)
     )
 end
 
-# Check for data structure allocations; otherwise initialize.
-function __mm_init__(::MMSVD, problem::BinarySVMProblem, extras)
-    if :projection in keys(extras) && :buffer in keys(extras) # TODO
-        return extras
-    else
-        __mm_init__(MMSVD(), problem, nothing)
-    end
-end
+# Assume extras has the correct data structures.
+__mm_init__(::MMSVD, problem::BinarySVMProblem, extras) = extras
 
 # Update data structures due to change in model size, k.
 __mm_update_sparsity__(::MMSVD, problem::BinarySVMProblem, lambda, rho, k, extras) = nothing
@@ -82,11 +76,11 @@ function __apply_H_inverse__!(x, H, b, buffer, α::Real=zero(eltype(x)))
     end
 
     # accumulate Ψ * Vᵀ * b
-    mul!(buffer, V', b)
+    BLAS.gemv!('T', one(γ), V, b, zero(γ), buffer)
     lmul!(Ψ, buffer)
 
     # complete the product with a 5-arg mul!
-    mul!(x, V, buffer, -α/γ, one(γ))
+    BLAS.gemv!('N', -α/γ, V, buffer, one(γ), x)
 
     return nothing
 end
@@ -94,7 +88,8 @@ end
 function __H_inverse_quadratic__(H, x, buffer)
     γ, V, Ψ = H
 
-    mul!(buffer, V', x)
+    T = eltype(buffer)
+    BLAS.gemv!('T', one(T), V, x, zero(T), buffer)
     @inbounds for i in eachindex(buffer)
         buffer[i] = sqrt(Ψ.diag[i]) * buffer[i]
     end
@@ -108,17 +103,19 @@ function __mm_iterate__(::MMSVD, problem::BinarySVMProblem, lambda, rho, k, extr
     T = floattype(problem)
     c1, c2, c3 = convert(T, 1/n), convert(T, rho), convert(T, lambda)
     
-    f = function(problem, extras)
-        A = get_design_matrix(problem)
+    f = let c1=c1, c2=c2, c3=c3
+        function(problem, extras)
+            A = get_design_matrix(problem)
 
-        # LHS: H = A'A + λI; pass as (γ, V, Ψ) which computes H⁻¹ = γ[I - V Ψ Vᵀ]
-        H = (c2+c3, extras.V, extras.Ψ)
+            # LHS: H = A'A + λI; pass as (γ, V, Ψ) which computes H⁻¹ = γ⁻¹[I - V Ψ Vᵀ]
+            H = (c2+c3, extras.V, extras.Ψ)
 
-        # RHS: u = 1/n * Aᵀzₘ + ρ * P(wₘ)
-        _, u = get_params_proj(problem)
-        mul!(u, A', extras.z, c1, c2)
+            # RHS: u = 1/n * Aᵀzₘ + ρ * P(wₘ)
+            _, u = get_params_proj(problem)
+            BLAS.gemv!('T', c1, A, extras.z, c2, u)
 
-        return H, u
+            return H, u
+        end
     end
 
     apply_projection(extras.projection, problem, k)
@@ -141,10 +138,10 @@ function __reg_iterate__(::MMSVD, problem::BinarySVMProblem, lambda, extras)
             # LHS: H = A'A + λI; pass as (γ, V, Ψ) which computes H⁻¹ = γ[I - V Ψ Vᵀ]
             H = (c3, extras.V, extras.Ψ)
 
-        # RHS: u = 1/n * Aᵀzₘ
-        _, u = get_params_proj(problem)
-        fill!(u, 0)
-        mul!(u, A', extras.z, c1, zero(c1))
+            # RHS: u = 1/n * Aᵀzₘ
+            _, u = get_params_proj(problem)
+            fill!(u, 0)
+            BLAS.gemv!('T', c1, A, extras.z, zero(c1), u)
 
             return H, u
         end
