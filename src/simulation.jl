@@ -62,9 +62,11 @@ function synthetic(a,b,c,d,e; rng::AbstractRNG=StableRNG(2000), prob::Real=1.0, 
             inversions += 1
         end
     end
-    println("[  synthetic: $(m) instances / $(n) features  ]")
-    println("  ∘ Pr(y | x) = $(prob)")
-    println("  ∘ $inversions class inversions ($(inversions/m) Bayes error)")
+    @info """
+    [ synthetic: $(m) instances / $(n) features ]"
+        ∘ Pr(y | x) = $(prob)
+        ∘ $inversions class inversions ($(inversions/m) Bayes error)
+    """
     return L, X
 end
 
@@ -123,9 +125,11 @@ function spiral(class_sizes;
         end
     end
 
-    println("[  spiral: $(N) instances / 2 features / 3 classes  ]")
-    println("  ∘ Pr(y | x) = $(prob)")
-    println("  ∘ $inversions class inversions ($(inversions/N) Bayes error)")
+    @info """
+    [ spiral: $(N) instances / 2 features / 3 classes ]
+        ∘ Pr(y | x) = $(prob)
+        ∘ $inversions class inversions ($(inversions/N) Bayes error)
+    """
 
     return L, X
 end

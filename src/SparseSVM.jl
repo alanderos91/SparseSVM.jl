@@ -20,82 +20,73 @@ Uses DataDeps to download data as needed.
 Inspired by UCIData.jl: https://github.com/JackDunnNZ/UCIData.jl
 =#
 
+##### DATADEP REGISTRATION #####
+
+const DATADEPNAME = "SparseSVM"
 const DATA_DIR = joinpath(@__DIR__, "data")
+const MESSAGES = Ref(String[])
+const REMOTE_PATHS = Ref([])
+const CHECKSUMS = Ref([])
+const FETCH_METHODS = Ref([])
+const POST_FETCH_METHODS = Ref([])
+const DATASETS = Ref(String[])
 
 include("simulation.jl")
-
-"""
-`list_datasets()`
-
-List available datasets in SparseSVM.
-"""
-list_datasets() = map(x -> splitext(x)[1], readdir(DATA_DIR))
+include("datadeps.jl")
 
 function __init__()
-    for dataset in list_datasets()
-        include(joinpath(DATA_DIR, dataset * ".jl"))
-    end
-end
-
-"""
-`dataset(str)`
-
-Load a dataset named `str`, if available. Returns data as a `DataFrame` where
-the first column contains labels/targets and the remaining columns correspond to
-distinct features.
-"""
-function dataset(str)
-    # Locate dataset file.
-    dataset_path = @datadep_str str
-    file = readdir(dataset_path)
-    index = findfirst(x -> occursin("data.", x), file)
-    if index isa Int
-        dataset_file = joinpath(dataset_path, file[index])
-    else # is this unreachable?
-        error("Failed to locate a data.* file in $(dataset_path)")
+    # Delete README.md in data/.
+    readme = joinpath(DATA_DIR, "README.md")
+    if ispath(readme)
+        rm(readme)
     end
     
-    # Read dataset file as a DataFrame.
-    df = if splitext(dataset_file)[2] == ".csv"
-        CSV.read(dataset_file, DataFrame)
-    else # assume .csv.gz
-        open(GzipDecompressorStream, dataset_file, "r") do stream
-            CSV.read(stream, DataFrame)
-        end
+    # Add arguments to Refs.
+    for dataset_jl in readdir(DATA_DIR)
+        include(joinpath(DATA_DIR, dataset_jl))
     end
-    return df
-end
 
-function process_dataset(path::AbstractString; header=false, missingstrings="", kwargs...)
-    input_df = CSV.read(path, DataFrame, header=header, missingstrings=missingstrings)
-    process_dataset(input_df; kwargs...)
-    rm(path)
-end
-
-function process_dataset(input_df::DataFrame;
-    target_index=-1,
-    feature_indices=1:0,
-    ext=".csv")
-    # Build output DataFrame.
-    output_df = DataFrame()
-    output_df.target = input_df[!, target_index]
-    output_df = hcat(output_df, input_df[!, feature_indices], makeunique=true)
-    output_cols = [ :target; [Symbol("x", n) for n in eachindex(feature_indices)] ]
-    rename!(output_df, output_cols)
-    dropmissing!(output_df)
+    # Compile a help message from each dataset.
+    # Save the output of the help message in DATA_DIR.
+    readme_content = """
+    # SparseSVM Examples
     
-    # Write to disk.
-    output_path = "data" * ext
-    if ext == ".csv"
-        CSV.write(output_path, output_df, delim=',', writeheader=true)
-    elseif ext == ".csv.gz"
-        open(GzipCompressorStream, output_path, "w") do stream
-            CSV.write(stream, output_df, delim=",", writeheader=true)
-        end
-    else
-        error("Unknown file extension option '$(ext)'")
+    You can load an example by invoking `SparseSVM.dataset(name)`.
+    The list of available datasets is accessible via `SparseSVM.list_datasets()`.
+
+    Please note that the descriptions here are *very* brief summaries. Follow the links for additional information.
+
+    $(join(MESSAGES[], '\n')) 
+    """
+
+    open(readme, "w") do io
+        write(io, readme_content)
     end
+
+    # Register the DataDep as SparseSVM.
+    register(DataDep(
+        DATADEPNAME,
+        """
+        Welcome to the SparseSVM installation.
+    
+        This program will now attempt to
+
+            (1) download a few datasets from the UCI Machine Learning Repository, and
+            (2) simulate additional synthetic datasets.
+        
+        Please see $(readme) for a preview of each example.
+        """,
+        REMOTE_PATHS[],
+        CHECKSUMS[];
+        fetch_method=FETCH_METHODS[],
+        post_fetch_method=POST_FETCH_METHODS[],
+    ))
+
+    # Trigger the download process.
+    @datadep_str(DATADEPNAME)
 end
+
+##### END DATADEP REGISTRATION #####
 
 include("problem.jl")
 include("transform.jl")

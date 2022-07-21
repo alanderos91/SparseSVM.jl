@@ -1,53 +1,78 @@
-using DataDeps
+function process_optdigits(local_path, dataset)
+    # Read both training and testing files.
+    dir = dirname(local_path)
+    tra = joinpath(dir, "optdigits.tra")
+    tes = joinpath(dir, "optdigits.tes")
+    df = vcat(
+        CSV.read(tra, DataFrame, header=false),
+        CSV.read(tes, DataFrame, header=false),
+    )
+    tmpfile = joinpath(dir, "$(dataset).tmp")
+    CSV.write(tmpfile, df; writeheader=false, delim=',')
 
-register(DataDep(
-    "optdigits",
-    """
-    Dataset: optdigits
-    Donors: E. Alpaydin, C. Kaynak
-    Department of Computer Engineering
-    Bogazici University, 80815 Istanbul Turkey
-    Website: https://archive.ics.uci.edu/ml/datasets/optical+recognition+of+handwritten+digits
-
-    Observations: 5620
-    Features:     64
-    Classes:      10
-    """,
-    [
-    "https://archive.ics.uci.edu/ml/machine-learning-databases/optdigits/optdigits.tra",
-    "https://archive.ics.uci.edu/ml/machine-learning-databases/optdigits/optdigits.tes"
-    ],
-    "8f0dbee3cf326eb016eef623a392c9f92fc15e201c06c5104a1500828289af65",
-    #
-    # Disclaimer: Want to combine both .tra and .tes into a single .csv.
-    # Design of post_fetch_method may not have been designed with this in mind.
-    # Workaround here is to do nothing to first file, then assume first file has been
-    # downloaded and can be loaded in the second function.
-    # This works in practice, but will fail when running preupload_check.
-    # 
-    # Reason: `path` is randomly generated and differs between the two calls.
-    #
-    post_fetch_method = [
-    identity,
-    path -> begin
-        # Read both training and testing files.
-        dir = dirname(path)
-        tra = joinpath(dir, "optdigits.tra")
-        tes = joinpath(dir, "optdigits.tes")
-        df = vcat(
-            CSV.read(tra, DataFrame, header=false),
-            CSV.read(tes, DataFrame, header=false)
-        )
+    # Standardize format.
+    SparseSVM.process_dataset(tmpfile, dataset;
+        label_mapping=string,
+        header=false,
+        class_index=ncol(df),
+        variable_indices=1:ncol(df)-1,
+        ext=".csv",
+    )
         
-        # Process the data as usual.
-        SparseSVM.process_dataset(df,
-            target_index=ncol(df),
-            feature_indices=1:ncol(df)-1,
-            ext=".csv",
-        )
+    # Store column information.
+    info_file = joinpath(dir, "$(dataset).info")
+    column_info = [["digit"]; ["$(i)x$(j)" for i in 1:8 for j in 1:8]]
+    column_info_df = DataFrame(columns=column_info)
+    CSV.write(info_file, column_info_df; writeheader=false, delim=',')
 
-        # Clean up by removing separate training and testing files.
-        rm(tra)
-        rm(tes)
-    end],
-))
+    # Clean up by removing separate training and testing files.
+    rm(tra)
+    rm(tes)
+
+    return nothing
+end
+
+push!(
+    MESSAGES[],
+    """
+    ## Dataset: optdigits
+
+    **10 classes / 5620 instances / 64 variables**
+
+    See: https://archive.ics.uci.edu/ml/datasets/optical+recognition+of+handwritten+digits
+    """
+)
+
+push!(
+    REMOTE_PATHS[],
+    [
+        "https://archive.ics.uci.edu/ml/machine-learning-databases/optdigits/optdigits.tra",
+        "https://archive.ics.uci.edu/ml/machine-learning-databases/optdigits/optdigits.tes"
+    ]
+)
+
+push!(
+    CHECKSUMS[],
+    [
+        "e1b683cc211604fe8fd8c4417e6a69f31380e0c61d4af22e93cc21e9257ffedd",
+        "6ebb3d2fee246a4e99363262ddf8a00a3c41bee6014c373ed9d9216ba7f651b8",
+    ]
+)
+
+push!(
+    FETCH_METHODS[],
+    [
+        DataDeps.fetch_default,
+        DataDeps.fetch_default,
+    ]
+)
+
+push!(
+    POST_FETCH_METHODS[],
+    [
+        identity,
+        path -> process_optdigits(path, "optdigits"),
+    ]
+)
+
+push!(DATASETS[], "optdigits")
