@@ -1,7 +1,7 @@
 module SparseSVM
 using DataDeps, CSV, DataFrames, CodecZlib
 using MLDataUtils
-using KernelFunctions, LinearAlgebra
+using KernelFunctions, LinearAlgebra, SparseArrays
 using Random, Statistics, StatsBase, StableRNGs
 using Polyester, Parameters
 using Printf, ProgressMeter

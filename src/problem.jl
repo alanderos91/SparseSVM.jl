@@ -76,6 +76,13 @@ struct BinarySVMProblem{T,S,YT,XT,KT,LT,encT,kernT,coeffT,resT,gradT} <: Abstrac
         end
         LT = typeof(labels)
 
+        fill!(coeff, zero(T))
+        fill!(coeff_prev, zero(T))
+        fill!(proj, zero(T))
+        fill!(res.main, zero(T))
+        fill!(res.dist, zero(T))
+        fill!(grad, 0)
+
         new{T,S,YT,XT,KT,LT,encT,kernT,coeffT,resT,gradT}(
             n, p, y, X, KY, intercept,
             labels, ovr_encoding,
@@ -282,33 +289,36 @@ function __predict__(::Nothing, problem::BinarySVMProblem, x::AbstractVector)
     return yhat
 end
 
-function __predict__(::Nothing, problem::BinarySVMProblem, X::AbstractMatrix)
-    @unpack p = problem
+function __predict__(::Nothing, problem::BinarySVMProblem, _X::AbstractMatrix)
+    T, p = floattype(problem), problem.p
     b, w = get_params_proj(problem)
-    yhat = b .+ view(X, :, 1:p) * w
+    X = view(_X, :, 1:p)
+    yhat = similar(X, size(X, 1))
+    fill!(yhat, b)
+    BLAS.gemv!('N', one(T), X, w, one(T), yhat)
     return yhat
 end
 
-function __predict__(::Kernel, problem::BinarySVMProblem, _x::AbstractVector)
-    @unpack n, p, y, X, kernel, intercept = problem
+function __predict__(kernel::Kernel, problem::BinarySVMProblem, _x::AbstractVector)
+    @unpack p, y = problem
+    b, w = get_params_proj(problem)
     x = view(_x, 1:p)
-    b, w = get_params_proj(problem)
-    yhat = b
-    for (j, xⱼ) in enumerate(eachrow(X))
-        yhat = yhat + w[j] * y[j] * kernel(x, xⱼ)
-    end
+    KY = kernelmatrix(kernel, problem.X, x', obsdim=1)
+    lmul!(Diagonal(y), KY)
+    yhat = BLAS.dot(KY, w) + b
     return yhat
 end
 
-function __predict__(::Kernel, problem::BinarySVMProblem, X::AbstractMatrix)
-    n = size(X, 1)
-    yhat = Vector{floattype(problem)}(undef, n)
-    nthreads = BLAS.get_num_threads()
-    BLAS.set_num_threads(1)
-    @batch per=core for i in 1:n
-        yhat[i] = predict(problem, view(X, i, :))
-    end
-    BLAS.set_num_threads(nthreads)
+function __predict__(kernel::Kernel, problem::BinarySVMProblem, _X::AbstractMatrix)
+    @unpack p, y = problem
+    T = floattype(problem)
+    b, w = get_params_proj(problem)
+    X = view(_X, :, 1:p)
+    yhat = Vector{floattype(problem)}(undef, size(X, 1))
+    fill!(yhat, b)
+    KY = kernelmatrix(kernel, X, problem.X, obsdim=1)
+    rmul!(KY, Diagonal(y))
+    BLAS.gemv!('N', one(T), KY, w, one(T), yhat)
     return yhat
 end
 
@@ -332,14 +342,14 @@ end
 
 function __classify__(problem::BinarySVMProblem, y::AbstractVector)
     n = length(y)
-    label = Vector{labeltype(problem)}(undef, n)
+    predicted_label = Vector{labeltype(problem)}(undef, n)
     nthreads = BLAS.get_num_threads()
     BLAS.set_num_threads(1)
-    @batch per=core for i in eachindex(label)
-        label[i] = __classify__(problem, y[i])
+    @batch per=core for i in eachindex(predicted_label)
+        @inbounds predicted_label[i] = __classify__(problem, y[i])
     end
     BLAS.set_num_threads(nthreads)
-    return label
+    return predicted_label
 end
 
 """
@@ -356,7 +366,7 @@ function support_vectors(::Nothing, problem::BinarySVMProblem)
 
     # determine scale of values
     scale_min, scale_max = Inf, -Inf
-    for i in eachindex(y)
+    @inbounds for i in eachindex(y)
         z = y[i] * yhat[i]
         absz = abs(z)
         if absz > 0
@@ -368,7 +378,7 @@ function support_vectors(::Nothing, problem::BinarySVMProblem)
 
     margin_sv = Int[]
     nonmargin_sv = Int[]
-    for i in eachindex(y)
+    @inbounds for i in eachindex(y)
         z = y[i]*yhat[i]
         on_margin = abs(1-z) / scale_max <= tol
         slack = max(0, 1-z)
@@ -757,41 +767,97 @@ function Base.show(io::IO, problem::MultiSVMProblem)
     print(io, "\n  ∘ intercept? $(problem.intercept)")
 end
 
-cast_votes!(problem, x) = __cast_votes__!(problem.strategy, problem.svm, problem.encoding, problem.vote, x)
+predict(problem::MultiSVMProblem, x) = __predict__(problem.kernel, problem, x)
 
-function __cast_votes__!(::OVO, svms, encoding, vote, x)
-    fill!(vote, 0)
-    for svm in svms
-        predicted_label = classify(svm, x)
-        j = label2ind(predicted_label, encoding)
-        vote[j] += 1
+function __predict__(::Nothing, problem::MultiSVMProblem, x::AbstractVector)
+    yhat = Vector{Float64}(undef, length(problem.svm))
+    for (j, svm) in enumerate(problem.svm)
+        @inbounds yhat[j] = __predict__(nothing, svm, x)
+    end
+    return yhat
+end
+
+function __predict__(::Nothing, problem::MultiSVMProblem, X::AbstractMatrix)
+    yhat = Matrix{Float64}(undef, size(X, 1), length(problem.svm))
+    for (j, svm) in enumerate(problem.svm)
+        @inbounds yhat[:,j] .= __predict__(nothing, svm, X)
+    end
+    return yhat
+end
+
+function __predict__(kernel::Kernel, problem::MultiSVMProblem, x::AbstractVector)
+    p = problem.p
+    yhat = Vector{Float64}(undef, length(problem.svm))
+    @inbounds for (k, svm) in enumerate(problem.svm)
+        b, w = get_params_proj(svm)
+        KY = kernelmatrix(kernel, svm.X, view(x, 1:p)', obsdim=1)
+        lmul!(Diagonal(svm.y), KY)
+        yhat[k] = BLAS.dot(KY, w) + b
+    end
+    return yhat
+end
+
+function __predict__(kernel::Kernel, problem::MultiSVMProblem, X::AbstractMatrix)
+    p = problem.p
+    yhat = Matrix{Float64}(undef, size(X, 1), length(problem.svm))
+    idx = Int[]
+    for subset in problem.subset
+        sort!(union!(idx, subset))
+    end
+    K = kernelmatrix(kernel, view(X, :, 1:p), problem.data, obsdim=1)
+    @inbounds for k in axes(yhat, 2)
+        b, w = get_params_proj(problem.svm[k])
+        c = sparsevec(problem.subset[k], w .* problem.svm[k].y, size(K, 2))
+        yhat[:,k] .= K*c .+ b
+    end
+    return yhat
+end
+
+function cast_vote!(::OVO, vote, svm, encoding, label_j)
+    j = label2ind(label_j, encoding)
+    @inbounds vote[j] += 1
+end
+
+function cast_vote!(::OVR, vote, svm, encoding, label_j)
+    positive_label = poslabel(svm)
+    if label_j == positive_label
+        j = label2ind(label_j, encoding)
+        @inbounds vote[j] += 1
     end
 end
 
-function __cast_votes__!(::OVR, svms, encoding, vote, x)
+determine_winner(votes, encoding) = ind2label(argmax(votes), encoding)
+
+MLDataUtils.classify(problem::MultiSVMProblem, x) = __classify__(problem, predict(problem, x))
+
+function __classify__(problem::MultiSVMProblem, y::AbstractVector, vote::AbstractVector=problem.vote)
     fill!(vote, 0)
-    for svm in svms
-        predicted_label = classify(svm, x)
-        positive_label = poslabel(svm)
-        if predicted_label == positive_label
-            j = label2ind(predicted_label, encoding)
-            vote[j] += 1
-        end
+    for (yj, svm) in zip(y, problem.svm)
+        label_j = __classify__(svm, yj)
+        cast_vote!(problem.strategy, vote, svm, problem.encoding, label_j)
     end
-end
-
-determine_winner(problem::MultiSVMProblem) = ind2label(argmax(problem.vote), problem.encoding)
-
-function MLDataUtils.classify(problem::MultiSVMProblem, x::AbstractVector)
-    cast_votes!(problem, x)
-    predicted_label = determine_winner(problem)
+    predicted_label = determine_winner(vote, problem.encoding)
     return predicted_label
 end
 
-function MLDataUtils.classify(problem::MultiSVMProblem, X::AbstractMatrix)
-    predicted_label = Vector{labeltype(problem)}(undef, size(X, 1))
-    for i in eachindex(predicted_label)
-        predicted_label[i] = classify(problem, view(X, i, :))
+function __classify__(problem::MultiSVMProblem, Y::AbstractMatrix, vote::AbstractVector=problem.vote)
+    predicted_label = Vector{labeltype(problem)}(undef, size(Y, 1))
+    num_julia_threads = Threads.nthreads()
+
+    if num_julia_threads == 1
+        for i in axes(Y, 1)
+            @inbounds predicted_label[i] = __classify__(problem, view(Y, i, :), vote)
+        end
+    else # num_julia_threads > 1
+        workers = [similar(vote) for _ in 1:num_julia_threads]
+        num_BLAS_threads = BLAS.get_num_threads()
+        BLAS.set_num_threads(1)
+        @batch per=core for i in axes(Y, 1)
+            worker = workers[Threads.threadid()]
+            @inbounds predicted_label[i] = __classify__(problem, view(Y, i, :), worker)
+        end
+        BLAS.set_num_threads(num_BLAS_threads)
     end
+    
     return predicted_label
 end
