@@ -1,6 +1,7 @@
 using SparseSVM, KernelFunctions, Statistics, LinearAlgebra, StatsBase, MLDataUtils
 using CSV, DataFrames, Random, StableRNGs
 using Logging
+# using MKL
 
 using SparseSVM: CVStatisticsCallback, RepeatedCVCallback, extract_cv_data
 
