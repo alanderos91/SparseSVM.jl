@@ -1,170 +1,140 @@
 # load common packages + functions
 include("common.jl")
-include("LIBSVM_wrappers.jl")
 
-function init_ours(F, ctype, train_X, train_targets, tol, kernel, intercept, ninner, nouter, mult)
-    # Create classifier and use same initial point
-    classifier = make_classifier(ctype, train_X, train_targets, first(train_targets), kernel=kernel, intercept=intercept, strategy=SparseSVM.OVO())
-    
-    # Create design matrix and SVD (if needed)
-    A, Asvd = SparseSVM.get_A_and_SVD(classifier)
+# Print logging messages to STDOUT
+global_logger(ConsoleLogger(stdout))
 
-    # initialize weights with univariate solution
-    initialize_weights!(classifier, A)
+# Header for cross validatiton table.
+cv_table_header() = join(("algorithm","replicate","fold","lambda","sparsity","nnz",
+"iters","risk","loss","objective","gradient","norm","distance",
+"time","train","validation","test"), ',')
 
-    # Create closure to run our algorithm.
-    function run_ours(val)
-        trainMM!(classifier, A, F, tol, val,
-            fullsvd=Asvd,
-            nouter=nouter,
-            ninner=ninner,
-            mult=mult,
-            init=false,
-            verbose=false)
-        return classifier
-    end
+# Header for comparison table.
+comparison_table_header() = join(("algorithm", "model", "lambda", "sparsity", "nnz", "train", "test", "iterations", "risk", "loss", "objective", "distance", "gradient", "norm", "nsv"), ',')
 
-    return run_ours
-end
+function run_experiment(paths, dataset, svm_type, algorithm, lambda_grid, kwargs, need_shuffle)
+    # Unpack tuple arguments.
+    svm_kwargs, fit_kwargs, cv_kwargs = kwargs
+    settings_fname, results_fname, compare_fname = paths
+    alg_str = string(typeof(algorithm))
+    sparsity_grid = [0.0]
 
-function init_theirs(F, ctype, train_X, train_targets, tol, kernel, intercept, ninner, nouter, mult)
-    # Create classifier object. F should be one of our wrappers.
-    classifier = F(tol=tol, intercept=intercept)
-
-    # Create closure to run LIBSVM algorithm.
-    function run_theirs(val)
-        LIBSVM.set_params!(classifier, cost=val)
-        fit!(classifier, train_X, train_targets)
-        return classifier
-    end
-
-    return run_theirs
-end
-
-function cv(results, algname, init_f, grid, cv_set, test_set, nfolds; message = "Running CV... ")
-    # Extract test set pieces.
-    (test_X, test_targets) = test_set
-
-    # Initialize progress bar and run CV.
-    nvals = length(grid)
-    p = Progress(nfolds*nvals, 1, message)
-    for (j, fold) in enumerate(kfolds(cv_set, k=nfolds, obsdim=1))
-        # get training set and validation set
-        ((train_X, train_targets), (val_X, val_targets)) = fold
-
-        _r = @timed init_f(train_X, train_targets)
-        run_f = _r.value
-
-        for (i, val) in enumerate(grid)
-            # Run the training algorithm with hyperparameter = val.
-            r = @timed run_f(val)
-            classifier = r.value
-            t = i > 1 ? r.time : r.time + _r.time # account for init cost
-
-            # Compute evaluation metrics.
-            train_acc = round(accuracy_score(classifier, train_X, train_targets)*100, sigdigits=4)
-            val_acc = round(accuracy_score(classifier, val_X, val_targets)*100, sigdigits=4)
-            test_acc = round(accuracy_score(classifier, test_X, test_targets)*100, sigdigits=4)
-            sparsity = measure_model_sparsity(classifier)
-
-            # Append results to file.
-            writedlm(results, Any[
-                algname j val t train_acc val_acc test_acc sparsity
-            ])
-            flush(results)
-
-            # Update progress bar
-            next!(p, showvalues=[(:fold, j), (:val, val)])
+    # Save values of keyword arguments.
+    open(settings_fname, "w") do io
+        write(io, "========== SVM settings ==========\n\n")
+        for (key, val) in pairs(svm_kwargs)
+            write(io, key, "=", string(val), "\n")
         end
+        write(io, "\n========== fit settings ==========\n\n")
+        for (key, val) in pairs(fit_kwargs)
+            write(io, key, "=", string(val), "\n")
+        end
+        write(io, "\n========== cv settings  ==========\n\n")
+        for (key, val) in pairs(cv_kwargs)
+            write(io, key, "=", string(val), "\n")
+        end
+        write(io, "\n==========   sparsity   ==========\n\n")
+        write(io, "sparsity_grid=[", 0.0, "]", "\n")
+        write(io, "\n==========    lambda    ==========\n\n")
+        write(io, "lambda_grid=[", join(lambda_grid, ','), "]", "\n")
     end
-end
-
-function run_experiment(fname, dataset, our_grid, their_grid, ctype=MultiClassifier;
-    nfolds::Int=10,
-    proportion_train::Real=0.8,
-    tol::Real=1e-6,
-    nouter::Int=20,
-    ninner::Int=1000,
-    mult::Real=1.5,
-    scale::Symbol=:zscore,
-    kernel::Union{Nothing,KernelFunctions.Kernel}=nothing,
-    intercept::Bool=false,
-    kwargs...
-)
-    # Put options into a list
-    options = (
-        :nfolds => nfolds,
-        :fname => fname,
-        :dataset => dataset,
-        :ctype => ctype,
-        :proportion_train => proportion_train,
-        :tol => tol,
-        :nouter => nouter,
-        :ninner => ninner,
-        :mult => mult,
-        :scale => scale,
-        :kernel => kernel,
-        :intercept => intercept,
-    )
-
-    # Load the data
+    
+    # Load the data.
     df = SparseSVM.dataset(dataset)
-    y, X = Vector(df[!, 1]), Matrix{Float64}(df[!, 2:end])
-
-    if dataset == "TCGA-PANCAN-HiSeq"
-        # The TCGA data has a few columns full of 0s that should be dropped
-        idxs = findall(i -> isequal(0, maximum(X[:,i])), 1:size(X,2))
-        selected = setdiff(1:size(X,2), idxs)
-
-        # Limit to the first 10000 genes
-        X = X[:, selected[1:10000]]
-    end
-
-    _rescale_!(Val(scale), X)
-    labeled_data = (X, y)
+    labeled_data = Vector(string.(df[:, 1])), Matrix{Float64}(df[:, 2:end])
 
     # Create the train and test data sets.
-    cv_set, test_set = splitobs(labeled_data, at=proportion_train, obsdim=1)
+    if need_shuffle
+        shuffled_data = shuffleobs(labeled_data, obsdim=1, rng=cv_kwargs.rng)
+    else
+        shuffled_data = labeled_data
+    end
+    cv_set, test_set = splitobs(shuffled_data, at=cv_kwargs.at, obsdim=1)
+    problem = create_classifier(svm_type, shuffled_data, svm_kwargs)
 
-    # Open file for results. Save settings on a separate log.
-    dir = joinpath("results", dataset)
-    !isdir(dir) && mkdir(dir)
-    open(joinpath(dir, "$(fname).log"), "w") do io
-        for (key, val) in options
-            writedlm(io, [key val], '=')
+    # Precompile.
+    tmp_cv_kwargs = (; cv_kwargs..., nreplicates=3, nfolds=3,)
+    cb = RepeatedCVCallback{CVStatisticsCallback}(sparsity_grid, lambda_grid, 3, 3)
+    SparseSVM.repeated_cv(algorithm, problem, lambda_grid;
+        scoref=SparseSVM.prediction_accuracies,
+        fit_kwargs...,
+        tmp_cv_kwargs...,
+        show_progress=false,
+        cb=cb,
+    )
+
+    # Run cross-validation.
+    cb = RepeatedCVCallback{CVStatisticsCallback}(sparsity_grid, lambda_grid, cv_kwargs.nfolds, cv_kwargs.nreplicates)
+    cv_tmp = SparseSVM.repeated_cv(algorithm, problem, lambda_grid;
+        scoref=SparseSVM.prediction_accuracies,
+        fit_kwargs...,
+        cv_kwargs...,
+        show_progress=true,
+        cb=cb,
+    )
+
+    # Reshape data.
+    cv_scores = extract_cv_data(cv_tmp)
+    cv_extras = extract_cv_data(cb)
+
+    # Save results to file.
+    open(results_fname, "a") do io
+        x = cv_scores.time
+        is, js, ks, rs = axes(x)
+        for r in rs, k in ks, j in js, i in is
+            cv_data = (alg_str, r, k, lambda_grid[j], sparsity_grid[i],
+                cv_extras.nnz[i,j,k,r],
+                cv_extras.iters[i,j,k,r],
+                cv_extras.risk[i,j,k,r],
+                cv_extras.loss[i,j,k,r],
+                cv_extras.objective[i,j,k,r],
+                cv_extras.gradient[i,j,k,r],
+                cv_extras.norm[i,j,k,r],
+                cv_extras.distance[i,j,k,r],
+                cv_scores.time[i,j,k,r],
+                cv_scores.train[i,j,k,r],
+                cv_scores.validation[i,j,k,r],
+                cv_scores.test[i,j,k,r],
+            )
+            write(io, join(cv_data, ','), "\n")
         end
     end
-    results = open(joinpath(dir, "$(fname).out"), "w")
-    writedlm(results, ["alg" "fold" "value" "time" "train_acc" "val_acc" "test_acc" "sparsity"])
+    
+    # Average over folds and replicates.
+    dims = (3,4)
+    score_grid = dropdims(mean(cv_scores.validation, dims=dims), dims=dims)
 
-    # Benchmark MM.
-    fMM(X, y) = init_ours(sparse_direct!, ctype, X, y, tol, kernel, intercept, ninner, nouter, mult)
-    cv(results, "MM", fMM, our_grid, cv_set, test_set, nfolds,
-        message="Running MM... ")
+    # Select optimal set of hyperparameters. 
+    _, _, score_opt = SparseSVM.search_hyperparameters(sparsity_grid, lambda_grid, score_grid, minimize=false)
+    validation_accuracy, sparsity_opt, lambda_opt = score_opt
+    @info "Optimal hyperparameters" sparsity_opt lambda_opt validation_accuracy
 
-    # Benchmark SD.
-    fSD(X, y) = init_ours(sparse_steepest!, ctype, X, y, tol, kernel, intercept, ninner, nouter, mult)
-    cv(results, "SD", fSD, our_grid, cv_set, test_set, nfolds,
-        message="Running SD... ")
+    # Fit sparse model with cv_set using selected hyperparameters.
+    F = StatsBase.fit(cv_kwargs.data_transform, cv_set[2], dims=1)
+    SparseSVM.__adjust_transform__(F)
+    StatsBase.transform!(F, cv_set[2])
+    StatsBase.transform!(F, test_set[2])
 
-    if kernel isa Nothing
-        # Benchmark L2-regularized, L2-loss SVC.
-        fL2R(X, y) = init_theirs(LIBSVM_L2, nothing, X, y, tol, nothing, intercept, nothing, nothing, nothing)
-        cv(results, "L2R", fL2R, their_grid, cv_set, test_set, nfolds,
-            message="Running L2R_L2LOSS_SVC... ")
+    problemA = create_classifier(svm_type, cv_set, svm_kwargs)
+    resultA = SparseSVM.fit(algorithm, problemA, lambda_opt)
 
-        # Benchmark L1-regularized, L2-loss SVC.
-        fL1R(X, y) = init_theirs(LIBSVM_L1, nothing, X, y, tol, nothing, intercept, nothing, nothing, nothing)
-        cv(results, "L1R", fL1R, their_grid, cv_set, test_set, nfolds,
-            message="Running L1R_L2LOSS_SVC... ")
-    else
-        # Benchmark non-linear SVC with Radial Basis Kernel.
-        fSVC(X, y) = init_theirs(LIBSVM_RB, nothing, X, y, tol, nothing, intercept, nothing, nothing, nothing)
-        cv(results, "SVC", fSVC, their_grid, cv_set, test_set, nfolds,
-            message="Running SVC w/ RBF kernel... ")
+    # Compare the three models.
+    cv_L, cv_X = getobs(cv_set, obsdim=1)
+    test_L, test_X = getobs(test_set, obsdim=1)
+    train_accuracyA = prediction_accuracy(problemA, cv_L, cv_X)
+    test_accuracyA = prediction_accuracy(problemA, test_L, test_X)
+    itersA, statsA = extract_iters_and_stats(resultA)
+
+    @info "Sparse SVM results" train_accuracy=train_accuracyA test_accuracy=test_accuracyA iterations=itersA statsA...
+
+    open(compare_fname, "a") do io
+        nnz = count(!isequal(0), last(SparseSVM.get_params_proj(problemA)))
+        nsv = SparseSVM.support_vectors(problemA) |> length
+        rowA = (alg_str, "sparse", lambda_opt, sparsity_opt, nnz, train_accuracyA, test_accuracyA, itersA, statsA..., nsv)
+        write(io, join(rowA, ','), "\n")
     end
 
-    close(results)
+    flush(stdout)
 
     return nothing
 end
@@ -172,9 +142,19 @@ end
 ##### MAIN #####
 include("examples.jl")
 
+if length(ARGS) < 2
+    error("""
+    Need at least two arguments.
+
+    - For i = 1, ARGS[1] should be a directory
+    - For i > 1, ARGS[i] should be a dataset
+    """)
+end
+
 # Check for unknown examples.
+dir = ARGS[1]
 examples = String[]
-for example in ARGS
+for example in ARGS[2:end]
     if example in EXAMPLES
         push!(examples, example)
     else
@@ -184,37 +164,44 @@ end
 
 # Run selected examples.
 for example in examples
-    println("Running '$(example)' benchmark")
-    
     # options
-    ctype, kwargs = OPTIONS[example]
-    our_grid = SPARSITY_GRID[example]
-    their_grid = MARGIN_GRID[example] 
+    dataset, SVM, svm_kwargs, fit_kwargs, cv_kwargs, need_shuffle = OPTIONS[example]
+    if SVM <: MultiSVMProblem && svm_kwargs.kernel isa Nothing
+        # Always use OVR for linear multiclass classifiers to match LIBLINEAR.
+        svm_kwargs = (;svm_kwargs..., strategy=OVR(),)
+    elseif SVM <: MultiSVMProblem && !(svm_kwargs.kernel isa Nothing)
+        # Always use OVO for nonlinear multiclass classifiers to match LIBSVM.
+        svm_kwargs = (;svm_kwargs..., strategy=OVO(),)
+    end
+    fit_kwargs = (;verbose=false, tolerance=fit_kwargs.gtol,)
+    kwargs = (svm_kwargs, fit_kwargs, cv_kwargs)
+    lambda_grid = LAMBDA_GRID[example]
 
-    # precompile
-    tmpkwargs = (kwargs..., ninner=2, nouter=2,)
-    fname = generate_filename(4, "all")
-    run_experiment(fname, example, our_grid, their_grid, ctype; nfolds=10, tmpkwargs...)
-    cleanup_precompile(example, fname)
+    # Set directory to store results.
+    full_dir = joinpath("results", example, dir)
+    if !isdir(full_dir)
+        mkpath(full_dir)
+    end
+
+    results_fname = joinpath(full_dir, "cv-libsvm-result.out")
+    open(results_fname, "w") do io
+        write(io, cv_table_header(), "\n")
+    end
+
+    compare_fname = joinpath(full_dir, "cv-libsvm-comparison.out")
+    open(compare_fname, "w") do io
+        write(io, comparison_table_header(), "\n")
+    end
 
     # run
-    fname = generate_filename(4, "all")
-    run_experiment(fname, example, our_grid, their_grid, ctype; nfolds=10, kwargs...)
+    for algorithm in (L2SVM(), L1SVM())
+        alg_str = string("alg=", string(typeof(algorithm)))
+        settings_fname = joinpath(full_dir, "cv-"*alg_str*".settings")
+        paths = (settings_fname, results_fname, compare_fname)
+
+        print("\n")
+        @info "Running example '$(example)'" dataset problem=SVM algorithm preshuffle=need_shuffle dir=full_dir settings=settings_fname cv_table=results_fname comparison_table=compare_fname
+
+        run_experiment(paths, dataset, SVM, algorithm, lambda_grid, kwargs, need_shuffle)
+    end
 end
-
-# function run_L2R()
-#     C_vals = [2.0 ^ k for k in 0:-1:-10]
-#     F = fL2R(X, y)
-#     for C in C_vals
-#         println("Running w/ C = $(C)...\n"); flush(stdout)
-#         F(C)
-#         println("\nFinished running w/ C = $(C).\n"); flush(stdout)
-#     end
-# end
-
-# open("/home/alanderos/Desktop/tmp.out", "w") do io
-#     redirect_stdout(run_L2R, io)
-# end
-
-# svm = F(1.0)
-# p, d = LIBSVM.LIBLINEAR.linear_predict(svm.model.fit, X')

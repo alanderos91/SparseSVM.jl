@@ -1,7 +1,7 @@
 using SparseSVM, KernelFunctions, Statistics, LinearAlgebra, StatsBase, MLDataUtils
 using CSV, DataFrames, Random, StableRNGs
 using Logging
-# using MKL
+using MKL
 
 using SparseSVM: CVStatisticsCallback, RepeatedCVCallback, extract_cv_data
 
@@ -37,13 +37,26 @@ prediction_accuracy(problem, L, X) = mean(SparseSVM.classify(problem, X) .== L)
 
 mse(x, y) = mean( (x - y) .^ 2 )
 
-function discovery_metrics(x, y)
+# checks causal vs noncausal assuming y is the ground truth
+function confusion_matrix_coefficients(x, y)
     TP = FP = TN = FN = 0
     for (xi, yi) in zip(x, y)
         TP += (xi != 0) && (yi != 0)
         FP += (xi != 0) && (yi == 0)
         TN += (xi == 0) && (yi == 0)
         FN += (xi == 0) && (yi != 0)
+    end
+    return (TP, FP, TN, FN)
+end
+
+# checks correct vs incorrect in binary classification
+function confusion_matrix_predictions(x, y, pl)
+    TP = FP = TN = FN = 0
+    for (xi, yi) in zip(x, y)
+        TP += (xi == yi) && (yi == pl) # match true label & yi has positive label (TP)
+        FP += (xi != yi) && (yi != pl) # different labels & yi has negative label (FP)
+        TN += (xi == yi) && (yi != pl) # match true label & yi has negative label (TN)
+        FN += (xi != yi) && (yi == pl) # different labels & yi has positive label (FN)
     end
     return (TP, FP, TN, FN)
 end

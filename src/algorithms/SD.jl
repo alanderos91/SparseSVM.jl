@@ -1,7 +1,7 @@
 """
 Iterate via Steepest Descent (SD).
 """
-struct SD <: AbstractMMAlg end
+struct SD <: AbstractMMAlgorithm end
 
 # Initialize data structures.
 function __mm_init__(::SD, problem::BinarySVMProblem, ::Nothing)

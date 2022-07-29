@@ -813,51 +813,75 @@ function __predict__(kernel::Kernel, problem::MultiSVMProblem, X::AbstractMatrix
     return yhat
 end
 
-function cast_vote!(::OVO, vote, svm, encoding, label_j)
-    j = label2ind(label_j, encoding)
-    @inbounds vote[j] += 1
+function MLDataUtils.classify(problem::MultiSVMProblem, x)
+    y = predict(problem, x)
+    __classify__(problem.strategy, y, problem.svm, problem.encoding)
 end
 
-function cast_vote!(::OVR, vote, svm, encoding, label_j)
-    positive_label = poslabel(svm)
-    if label_j == positive_label
-        j = label2ind(label_j, encoding)
-        @inbounds vote[j] += 1
-    end
-end
-
-determine_winner(votes, encoding) = ind2label(argmax(votes), encoding)
-
-MLDataUtils.classify(problem::MultiSVMProblem, x) = __classify__(problem, predict(problem, x))
-
-function __classify__(problem::MultiSVMProblem, y::AbstractVector, vote::AbstractVector=problem.vote)
-    fill!(vote, 0)
-    for (yj, svm) in zip(y, problem.svm)
-        label_j = __classify__(svm, yj)
-        cast_vote!(problem.strategy, vote, svm, problem.encoding, label_j)
-    end
-    predicted_label = determine_winner(vote, problem.encoding)
-    return predicted_label
-end
-
-function __classify__(problem::MultiSVMProblem, Y::AbstractMatrix, vote::AbstractVector=problem.vote)
-    predicted_label = Vector{labeltype(problem)}(undef, size(Y, 1))
+function __classify__(strategy::MultiClassStrategy, Y::AbstractMatrix, svm, encoding)
+    S = MLDataUtils.labeltype(encoding)
+    predicted_label = Vector{S}(undef, size(Y, 1))
     num_julia_threads = Threads.nthreads()
 
     if num_julia_threads == 1
         for i in axes(Y, 1)
-            @inbounds predicted_label[i] = __classify__(problem, view(Y, i, :), vote)
+            y = view(Y, i, :)
+            @inbounds predicted_label[i] = __classify__(strategy, y, svm, encoding)
         end
     else # num_julia_threads > 1
-        workers = [similar(vote) for _ in 1:num_julia_threads]
+        workers = [(similar(Y, size(Y, 2)), similar(Y, Int, size(Y, 2))) for _ in 1:num_julia_threads]
         num_BLAS_threads = BLAS.get_num_threads()
         BLAS.set_num_threads(1)
         @batch per=core for i in axes(Y, 1)
-            worker = workers[Threads.threadid()]
-            @inbounds predicted_label[i] = __classify__(problem, view(Y, i, :), worker)
+            y = view(Y, i, :)
+            confidence, vote = workers[Threads.threadid()]
+            @inbounds predicted_label[i] = __classify__(strategy, y, svm, encoding, confidence, vote)
         end
         BLAS.set_num_threads(num_BLAS_threads)
     end
     
     return predicted_label
 end
+
+function __classify__(strategy::MultiClassStrategy, y::AbstractVector, svm, encoding)
+    __classify__(strategy, y, svm, encoding, similar(y), similar(y, Int))
+end
+
+function __classify__(::OVO, y::AbstractVector, svm, encoding, confidence, vote)
+    fill!(confidence, 0)
+    fill!(vote, 0)
+    # Array 'confidence' accumulates values y_k predicted by each classifier.
+    # These values are scaled to (-1/3, 1/3) to nudge votes in case of ties.
+    # Crucially, this should not change results when there is a difference of one vote.
+    #
+    # This is the approach used by SciKitLearn (3/12/22):
+    # https://github.com/scikit-learn/scikit-learn/blob/main/sklearn/utils/multiclass.py#L474
+    @inbounds for (y_k, svm_k) in zip(y, svm)
+        label_k = __classify__(svm_k, y_k)
+        pl, nl = poslabel(svm_k), neglabel(svm_k)
+        i, j = label2ind(pl, encoding), label2ind(nl, encoding)
+        confidence[i] += y_k
+        confidence[j] -= y_k
+        vote[i] += label_k == pl
+        vote[j] += label_k == nl
+    end
+    for (i, x) in enumerate(confidence)
+        @inbounds confidence[i] = x / (3 * abs(x) + 1) + vote[i]
+    end
+    predicted_label = ind2label(argmax(confidence), encoding)
+    return predicted_label
+end
+
+function __classify__(::OVR, y::AbstractVector, svm, encoding, confidence, vote)
+    fill!(confidence, 0)
+    @inbounds for (y_k, svm_k) in zip(y, svm)
+        pl = poslabel(svm_k)
+        i = label2ind(pl, encoding)
+        confidence[i] += y_k
+    end
+    predicted_label = ind2label(argmax(confidence), encoding)
+    return predicted_label
+end
+
+get_labeled_data(problem::BinarySVMProblem) = (problem.labels, problem.X)
+get_labeled_data(problem::MultiSVMProblem) = (problem.labels, problem.data)

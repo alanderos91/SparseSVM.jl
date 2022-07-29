@@ -10,6 +10,7 @@ using DataFrames: copy, copyto!
 using ArraysOfArrays: VectorOfVectors
 
 import Base: show, getproperty
+import LIBSVM
 import MLDataUtils: poslabel, neglabel, classify
 import StatsBase: fit, transform!, reconstruct!
 
@@ -94,10 +95,12 @@ include("utilities.jl")
 include("projections.jl")
 include("callbacks.jl")
 
-abstract type AbstractMMAlg end
+abstract type AbstractAlgorithm end
+abstract type AbstractMMAlgorithm <: AbstractAlgorithm end
 
 include(joinpath("algorithms", "SD.jl"))
 include(joinpath("algorithms", "MMSVD.jl"))
+include(joinpath("algorithms", "libsvm.jl"))
 
 function __mm_init__(algorithm, problem::MultiSVMProblem, ::Nothing)
     return [__mm_init__(algorithm, svm, nothing) for svm in problem.svm]
@@ -125,7 +128,7 @@ include("cv.jl")
 
 export MultiClassStrategy, OVO, OVR
 export BinarySVMProblem, MultiSVMProblem
-export MMSVD, SD
+export MMSVD, SD, L2SVM, L1SVM
 export ZScoreTransform, NormalizationTransform, NoTransformation
 
 end # end module

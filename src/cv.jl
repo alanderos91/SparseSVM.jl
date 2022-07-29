@@ -13,7 +13,7 @@ Split data in `problem` into train-validation and test sets, then run cross-vali
 
 - `at`: A value between `0` and `1` indicating the proportion of samples/instances used for cross-validation, with remaining samples used for a test set (default=`0.8`).
 """
-function cv(algorithm::AbstractMMAlg, problem, grids::G; at::Real=0.8, kwargs...) where G
+function cv(algorithm::AbstractMMAlgorithm, problem, grids::G; at::Real=0.8, kwargs...) where G
     # Split data into cross-validation and test sets.
     @unpack p, labels, intercept = problem
     X = get_problem_data(problem)
@@ -37,7 +37,7 @@ Hyperparameter values are specified in `grids`, and data subsets are given as `d
 
 Additional arguments are propagated to `fit` and `anneal`. See also [`SparseSVM.fit`](@ref) and [`SparseSVM.anneal`](@ref).
 """
-function cv(algorithm::AbstractMMAlg, problem, grids::G, dataset_split::Tuple{S1,S2};
+function cv(algorithm::AbstractMMAlgorithm, problem, grids::G, dataset_split::Tuple{S1,S2};
     maxiter::Int=10^4,
     gtol::Real=DEFAULT_GTOL,
     nfolds::Int=5,
@@ -128,7 +128,7 @@ function cv(algorithm::AbstractMMAlg, problem, grids::G, dataset_split::Tuple{S1
     return result
 end
 
-function repeated_cv(algorithm::AbstractMMAlg, problem, grids::G; at::Real=0.8, kwargs...) where G
+function repeated_cv(algorithm::AbstractMMAlgorithm, problem, grids::G; at::Real=0.8, kwargs...) where G
     # Split data into cross-validation and test sets.
     @unpack p, labels, intercept = problem
     X = get_problem_data(problem)
@@ -136,7 +136,7 @@ function repeated_cv(algorithm::AbstractMMAlg, problem, grids::G; at::Real=0.8, 
     SparseSVM.repeated_cv(algorithm, problem, grids, dataset_split; kwargs...)
 end
 
-function repeated_cv(algorithm::AbstractMMAlg, problem, grids::G, dataset_split::Tuple{S1,S2};
+function repeated_cv(algorithm::AbstractMMAlgorithm, problem, grids::G, dataset_split::Tuple{S1,S2};
     nfolds::Int=5,
     nreplicates::Int=10,
     show_progress::Bool=true,

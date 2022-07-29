@@ -6,7 +6,7 @@ Solve a classification `problem` at the specified `sparsity` level and regulariz
 The solution is obtained via a proximal distance `algorithm` that gradually anneals parameter estimates
 toward the target sparsity set.
 """
-function fit(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real, sparsity::Real; kwargs...)
+function fit(algorithm::AbstractMMAlgorithm, problem::BinarySVMProblem, lambda::Real, sparsity::Real; kwargs...)
     extras = __mm_init__(algorithm, problem, nothing) # initialize extra data structures
     SparseSVM.fit!(algorithm, problem, lambda, sparsity, extras, (true,false,); kwargs...)
 end
@@ -18,7 +18,7 @@ Solve a classification with nonbinary labels using multiple SVMs to define a dec
 
 The same settings (that is, `algorithm`, `sparsity`, `lambda`, ...) are applied to each SVM.
 """
-function fit(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda::Real, sparsity::Real; kwargs...)
+function fit(algorithm::AbstractMMAlgorithm, problem::MultiSVMProblem, lambda::Real, sparsity::Real; kwargs...)
     extras = [__mm_init__(algorithm, svm, nothing) for svm in problem.svm] # initialize extra data structures
     SparseSVM.fit!(algorithm, problem, lambda, sparsity, extras, (true,false,); kwargs...)
 end
@@ -48,7 +48,7 @@ Same as `fit` but with preallocated data structures in `extras`.
 
 See also: [`SparseSVM.anneal!`](@ref) for additional keyword arguments applied at the annealing step.
 """
-function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real, sparsity::Real,
+function fit!(algorithm::AbstractMMAlgorithm, problem::BinarySVMProblem, lambda::Real, sparsity::Real,
     extras::Union{Nothing,NamedTuple}=nothing,
     update_extras::NTuple{2,Bool}=(true,false,);
     nouter::Int=100,
@@ -113,7 +113,7 @@ function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
     return (iters, state)
 end
 
-function fit!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda::Real, sparsity::Real,
+function fit!(algorithm::AbstractMMAlgorithm, problem::MultiSVMProblem, lambda::Real, sparsity::Real,
     extras::Union{Nothing,Vector}=nothing,
     update_extras::NTuple{2,Bool}=(true,false,);
     kwargs...)
@@ -146,7 +146,7 @@ end
 
 Solve the `rho`-penalized optimization problem at sparsity level `sparsity`.
 """
-function anneal(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real, rho::Real, sparsity::Real; kwargs...)
+function anneal(algorithm::AbstractMMAlgorithm, problem::BinarySVMProblem, lambda::Real, rho::Real, sparsity::Real; kwargs...)
     extras = __mm_init__(algorithm, problem, nothing)
     SparseSVM.anneal!(algorithm, problem, lambda, rho, sparsity, extras, (true,true,); kwargs...)
 end
@@ -171,7 +171,7 @@ Same as `anneal(algorithm, problem, rho, sparsity)`, but with preallocated data 
 - `nesterov_threshold`: The number of early iterations before applying Nesterov acceleration (default=`10`).
 - `cb`: A callback function for extending functionality.
 """
-function anneal!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real, rho::Real, sparsity::Real,
+function anneal!(algorithm::AbstractMMAlgorithm, problem::BinarySVMProblem, lambda::Real, rho::Real, sparsity::Real,
     extras::Union{Nothing,NamedTuple}=nothing,
     update_extras::NTuple{2,Bool}=(true,true);
     ninner::Int=10^4,
@@ -246,12 +246,12 @@ end
 
 Fit a SVM using the L2-loss / L2-regularization model.
 """
-function fit(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real; kwargs...)
+function fit(algorithm::AbstractMMAlgorithm, problem::BinarySVMProblem, lambda::Real; kwargs...)
     extras = __mm_init__(algorithm, problem, nothing) # initialize extra data structures
     SparseSVM.fit!(algorithm, problem, lambda, extras, true; kwargs...)
 end
 
-function fit!(algorithm::AbstractMMAlg, problem::BinarySVMProblem, lambda::Real,
+function fit!(algorithm::AbstractMMAlgorithm, problem::BinarySVMProblem, lambda::Real,
     extras::Union{Nothing,NamedTuple}=nothing,
     update_extras::Bool=true;
     maxiter::Int=10^3,
@@ -322,12 +322,12 @@ end
 
 Fit multiple SVMs using the L2-loss / L2-regularization model.
 """
-function fit(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda::Real; kwargs...)
+function fit(algorithm::AbstractMMAlgorithm, problem::MultiSVMProblem, lambda::Real; kwargs...)
     extras = [__mm_init__(algorithm, svm, nothing) for svm in problem.svm] # initialize extra data structures
     SparseSVM.fit!(algorithm, problem, lambda, extras, true; kwargs...)
 end
 
-function fit!(algorithm::AbstractMMAlg, problem::MultiSVMProblem, lambda::Real,
+function fit!(algorithm::AbstractMMAlgorithm, problem::MultiSVMProblem, lambda::Real,
     extras::Union{Nothing,Vector}=nothing,
     update_extras::Bool=true;
     kwargs...)

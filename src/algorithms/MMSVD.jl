@@ -1,7 +1,7 @@
 """
 Iterate by solving linear systems with a thin singular value decomposition (SVD).
 """
-struct MMSVD <: AbstractMMAlg end
+struct MMSVD <: AbstractMMAlgorithm end
 
 # Initialize data structures.
 function __mm_init__(::MMSVD, problem::BinarySVMProblem, ::Nothing)
