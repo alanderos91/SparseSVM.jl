@@ -1,250 +1,198 @@
 include("common.jl")
-using SparseArrays
+include("examples.jl")
 
-function simulate_data(rng,
-        m, n, k,
-        effect_size,
-        default_sigma_ij, default_sigma_j,
-        causal_sigma_ij, causal_sigma_j,
-    )
-    # Set covariance matrix for predictors.
-    Σ = sparse(1.0 * I, n, n)
-    # Σ = Matrix{Float64}(default_sigma_j * I, n, n)
-    # for j in 1:n, i in j+1:n
-    #     Σ[j,i] = default_sigma_ij * randn(rng)
-    # end
+using ProgressMeter
 
-    # # Modify covariance matrix entries for causal predictors.
-    # for j in 1:k
-    #     Σ[j,j] = causal_sigma_j
-    #     for i in j+1:k
-    #         sigma_ij_sign = rand(rng, (-1, 1))
-    #         Σ[j,i] = sigma_ij_sign * causal_sigma_ij
-    #     end
-    # end
+const HEADER = [
+    "algorithm", "nsamples", "nvars", "ncausal",
+    "lambda", "sparsity", "k",
+    "time", "iters", "nSV", "risk", "loss", "objective", "distance", "gradient", "margin",
+    "MSE", "wTP", "wFP", "wTN", "wFN",
+    "trainTP", "trainFP", "trainTN", "trainFN", "train",
+    "testTP", "testFP", "testTN", "testFN", "test", 
+]
 
-    # Simulate predictors, X. No intercept.
-    C = cholesky(Symmetric(Σ))
-    L = sparse(C.L)
-    X = Matrix{Float64}(undef, m, n)
-    z = zeros(n)
-    for i in axes(X, 1)
-        Random.randn!(rng, z)
-        @views mul!(X[i, :], L, z)
-    end
-    _rescale_!(Val(:zscore), X)
+# Open file to write results on disk.
+function write_result(filepath, algorithm, problem, lambda, sparsity, result, gt, (train_L, train_X), (test_L, test_X))
+    open(filepath, "a") do results
+        row = Vector{String}(undef, 31)
+        # algorith + problem dimensions
+        row[1] = algorithm |> typeof |> string
+        row[2] = problem.n |> string
+        row[3] = problem.p |> string
+        row[4] = length(gt.causal) |> string
 
-    # Set causal coefficients.
-    beta = zeros(n)
-    for j in 1:k
-        beta_sign = rand(rng, (-1, 1))
-        beta_effect_size = effect_size[1] + (effect_size[2] - effect_size[1]) * rand(rng)
-        beta_effect_size = clamp(beta_effect_size, effect_size[1], effect_size[2])
-        beta[j] = beta_sign * beta_effect_size
-    end
+        # hyperparameter settings
+        row[5] = lambda |> string
+        row[6] = 100*sparsity |> string
+        row[7] = SparseSVM.sparsity_to_k(problem, sparsity) |> string
 
-    # Shuffle predictors
-    perm = randperm(rng, n)
-    causal_idx = perm[1:k]
-    @. X[:, perm] = X[:, perm]
-    @. beta[perm] = beta[perm]
+        # convergence data
+        (t, iters, stats) = result.time, result.value[1], result.value[2]
+        row[8] = t |> string
+        row[9] = iters |> string
+        row[10] = SparseSVM.support_vectors(problem) |> length |> string
+        row[11] = stats.risk |> string
+        row[12] = stats.loss |> string
+        row[13] = stats.objective |> string
+        row[14] = stats.distance |> string
+        row[15] = stats.gradient |> string
+        row[16] = 1 / stats.norm |> string
 
-    # Simulate the targets; one of two classes.
-    y = sign.(X*beta)
-    target = map(yi -> yi > 0 ? 'A' : 'B', y)
+        # performance metrics
+        _, w = SparseSVM.get_params_proj(problem)
+        row[17] = mse(w, gt.coeff) |> string
 
-    return target, X, beta, causal_idx, Σ
-end
+        (TP, FP, TN, FN) = confusion_matrix_coefficients(w, gt.coeff)
+        row[18] = TP |> string
+        row[19] = FP |> string
+        row[20] = TN |> string
+        row[21] = FN |> string
+        
+        (TP, FP, TN, FN) = confusion_matrix_predictions(SparseSVM.classify(problem, train_X), train_L, "A")
+        row[22] = TP |> string # number correct in class A
+        row[23] = FP |> string
+        row[24] = TN |> string # number correct in class B
+        row[25] = FN |> string
+        row[26] = TP + TN |> string
 
-function run_experiment(fname, algorithm::AlgOption, y, X, beta0, grid;
-        proportion_train::Real=0.8,
-        tol::Real=1e-6,
-        nouter::Int=20,
-        ninner::Int=1000,
-        mult::Real=1.2,
-        kwargs...
-    )
-    # Create the train and test data sets.
-    labeled_data = (X, y)
-    (train_X, train_targets), (test_X, test_targets) = splitobs(labeled_data, at=proportion_train, obsdim=1)
-
-    # Process options
-    f = get_algorithm_func(algorithm)
-    gridvals = sort!(unique(grid), rev=false) # iterate from least sparse to most sparse models
-    nvals = length(gridvals)
-
-    # Initialize classifier.
-    init_cost = @timed begin
-        classifier = BinaryClassifier{Float64}(train_X, train_targets, first(train_targets), intercept=false)
-        A, Asvd = SparseSVM.get_A_and_SVD(classifier)
-        initialize_weights!(classifier, A)
-        beta_init = copy(classifier.weights)
-    end
-
-    # Open file to write results on disk.
-    results = open(joinpath(dir, "$(fname).out"), "a+")
-    function write_result(classifier, s, result)
-        # Get timing and convergence data.
-        t = result.time + init_cost.time
-        iters, obj, dist, gradsq = result.value
-
-        # Check support vectors.
-        sv = count_support_vecs(classifier)
-
-        # Test the classifier.
-        train_acc = round(accuracy_score(classifier, train_X, train_targets)*100, sigdigits=4)
-        test_acc = round(accuracy_score(classifier, test_X, test_targets)*100, sigdigits=4)
-        sparsity = round(s*100, sigdigits=4)
-
-        # Check quality of solution against ground truth.
-        # How well are the effect sizes estimated?
-        beta = classifier.weights
-        MSE = mse(beta, beta0)
-
-        # How well are the causal coefficient determined?
-        (TP, FP, TN, FN) = discovery_metrics(beta, beta0)
+        (TP, FP, TN, FN) = confusion_matrix_predictions(SparseSVM.classify(problem, test_X), test_L, "A")
+        row[27] = TP |> string # number correct in class A
+        row[28] = FP |> string
+        row[29] = TN |> string # number correct in class B
+        row[30] = FN |> string
+        row[31] = TP + TN |> string
 
         # Write results to file.
-        writedlm(results, Any[
-            m n k0 sparsity sv t iters obj dist gradsq MSE TP FP TN FN train_acc test_acc 
-        ])
+        join(results, row, ','); write(results, '\n')
         flush(results)
     end
+end
+
+function run_experiment(filepath, algorithm, gt, lambda, grid; write_output::Bool=false, proportion_train::Real=0.8, kwargs...)
+    # Create the train and test data sets.
+    labeled_data = shuffleobs((gt.labels, gt.samples), obsdim=1, rng=gt.rng)
+    cv_set, test_set = splitobs(labeled_data, at=proportion_train, obsdim=1)
+    (train_L, train_X) = getobs(cv_set, obsdim=1)
+    (test_L, test_X) = getobs(test_set, obsdim=1)
 
     # Run the algorithm with different sparsity values.
-    m, n = size(X)
-    @showprogress 1 "Testing $(algorithm) on $(m) × $(n) problem... " for s in gridvals
-        copyto!(classifier.weights, beta_init)
-        result = @timed trainMM!(classifier, A, f, tol, s, fullsvd=Asvd,
-            nouter=nouter, ninner=ninner, mult=mult, init=false, verbose=false,
-        )
-        write_result(classifier, s, result)
+    F = StatsBase.fit(ZScoreTransform, train_X, dims=1)
+    SparseSVM.__adjust_transform__(F)
+    StatsBase.transform!(F, train_X)
+    StatsBase.transform!(F, test_X)
+
+    problem = BinarySVMProblem(train_L, train_X, "A", intercept=false)
+    extras = SparseSVM.__mm_init__(algorithm, problem, nothing)
+    m, n, _ = SparseSVM.probdims(problem)
+    @showprogress 1 "Testing $(algorithm) on $(m) × $(n) problem... " for sparsity in grid
+        fill!(problem.coeff_prev, 0)
+        result = @timed SparseSVM.fit!(algorithm, problem, lambda, sparsity, extras; kwargs...)
+        write_output && write_result(filepath, algorithm, problem, lambda, sparsity, result, gt, (train_L, train_X), (test_L, test_X))
     end
 
-    # Close file.
-    close(results)
+    return nothing
 end
 
-# Options
-algorithms = (MM, SD)
-fnames = map(opt -> generate_filename(2, opt), algorithms)
-proportion_train = 0.8
 
-default_size = 500
-p = floor(Int, log10(default_size)) + 1
-size_grid = (ceil(Int, 10^(p+u)) for u in range(0, 2, step=0.25))
-k0 = SparseSVM.sparsity_to_k(0.9, default_size)
-effect_size = [2.0, 10.0]
-default_sigma_j = 1.0
-default_sigma_ij = 0.0
-causal_sigma_j = 1.0
-causal_sigma_ij=causal_sigma_ij = 0.0
+function main()
+    # Options
+    ALGORITHMS = (MMSVD(), SD())
+    PROPORTION_TRAIN = 0.8
+    DEFAULT_SIZE = 500
+    K = round(Int, 0.1*DEFAULT_SIZE)
+    W_RANGE = [2.0, 10.0]
+    RNG = StableRNG(1903)
+    GTOL = 1e-4
+    DTOL = 1e-3
+    NINNER = 10^6
+    NOUTER = 100
+    RHO_INIT = 1.0
+    RHOF = SparseSVM.geometric_progression(1.2)
+    NESTEROV_DELAY = 10
+    RHO_MAX = 1e8
+    LAMBDA = 1.0
+    DIR = joinpath("results", "experiment2")
 
-seed = 2000
-simulate(m, n) = simulate_data(StableRNG(seed), m, n, k0,
-    effect_size,
-    default_sigma_ij,
-    default_sigma_j,
-    causal_sigma_ij,
-    causal_sigma_j
-)
+    # Initialize directories.
+    !isdir("results") && mkdir("results")
+    !isdir(DIR) && mkdir(DIR)
 
-tol = 1e-6
-ninner = 10^4
-nouter = 100
-mult = 1.2
+    p = floor(Int, log10(DEFAULT_SIZE)) + 1
+    size_grid = (ceil(Int, 10^(p+u)) for u in range(0, 2, step=0.25))
 
-# Initialize directories.
-dir = joinpath("results", "experiment2")
-!isdir("results") && mkdir("results")
-!isdir(dir) && mkdir(dir)
+    simulate(m, n) = let k=K, w_range=W_RANGE, rng=RNG
+        SparseSVM.simulate_ground_truth(m, n, k, w_range; rng=rng)
+    end
 
-# Pre-compile
-sparsity_grid = [0.0, 0.5]
-for opt in algorithms
-    m = 100
-    n = 100    
-    fname = generate_filename(2, opt)
-    y, X, beta0, _, _ = simulate(m, n)
-    run_experiment(fname, opt, y, X, beta0, sparsity_grid,
-        tol=tol,
+    kwargs = (;
+        gtol=GTOL,
+        dtol=DTOL,
         ninner=2,
         nouter=2,
-        mult=mult,
-        proportion_train=proportion_train,
-    )
-    rm(joinpath(dir, "$(fname).out"))
-end
-
-# Set the search grid.
-sparsity_grid = [ [0.0, 0.5, 0.9]; [1 - 50 / n for n in size_grid] ]
-
-# Initialize results and log files.
-for (opt, fname) in zip(algorithms, fnames)
-    options = (
-        :seed => seed,
-        :default_size => default_size,
-        :k0 => k0,
-        :effect_size_min => effect_size[1],
-        :effect_size_max => effect_size[2],
-        :default_sigma_ij => default_sigma_ij,
-        :default_sigma_j => default_sigma_j,
-        :causal_sigma_ij => causal_sigma_ij,
-        :causal_sigma_j => causal_sigma_j,
-        :algorithm => opt,
-        :proportion_train => proportion_train,
-        :tol => tol,
-        :nouter => nouter,
-        :ninner => ninner,
-        :mult => mult,
+        rhof=RHOF,
+        rho_init=RHO_INIT,
+        rho_max=RHO_MAX,
+        nesterov_threshold=NESTEROV_DELAY,
+        proportion_train=PROPORTION_TRAIN,
     )
 
-    # results file
-    open(joinpath("results", "experiment2", "$(fname).out"), "a+") do results
-        writedlm(results, ["m" "n" "k0" "sparsity" "sv" "time" "iter" "obj" "dist" "gradsq" "MSE" "TP" "FP" "TN" "FN" "train_acc" "test_acc"])
+    # Pre-compile.
+    sparsity_grid = [0.0, 0.5]
+    for algorithm in ALGORITHMS
+        m, n = 100, 100
+        fname = "not_used.txt"
+        gt = simulate(m, n)
+        run_experiment(fname, algorithm, gt, LAMBDA, sparsity_grid; write_output=false, kwargs...)
     end
-    
-    # log file
-    open(joinpath(dir, "$(fname).log"), "a+") do io
-        for (key, val) in options
-            writedlm(io, [key val], '=')
+
+    # Initialize output files with header.
+    for algorithm in ALGORITHMS
+        fname = joinpath(DIR, "$(string(typeof(algorithm))).out")
+        open(fname, "w") do results
+            global HEADER
+            join(results, HEADER, ','); write(results, '\n')
+            flush(results)
         end
-        println(io)
+    end
+
+    kwargs = (;
+        gtol=GTOL,
+        dtol=DTOL,
+        ninner=NINNER,
+        nouter=NOUTER,
+        rhof=RHOF,
+        rho_init=RHO_INIT,
+        rho_max=RHO_MAX,
+        nesterov_threshold=NESTEROV_DELAY,
+        proportion_train=PROPORTION_TRAIN,
+    )
+
+    sparsity_grid = make_sparsity_grid(DEFAULT_SIZE, 2)
+    sparsity_grid = filter!(<(0.9), sparsity_grid)
+    sparsity_grid = [ sparsity_grid; [1 - K / DEFAULT_SIZE]; [1 - K / n for n in size_grid] ]
+    unique!(sort!(sparsity_grid))
+
+    # Case m > n: More samples than predictors.
+    for _m in size_grid
+        m = round(Int, _m / PROPORTION_TRAIN)
+        n = DEFAULT_SIZE
+        gt = simulate(m, n)
+        for algorithm in ALGORITHMS
+            fname = joinpath(DIR, "$(string(typeof(algorithm))).out")
+            run_experiment(fname, algorithm, gt, LAMBDA, sparsity_grid; write_output=true, kwargs...)
+        end
+    end
+
+    # Case: m < n: More predictors than samples.
+    for n in size_grid
+        m = round(Int, DEFAULT_SIZE / PROPORTION_TRAIN) 
+        gt = simulate(m, n)
+        for algorithm in ALGORITHMS
+            fname = joinpath(DIR, "$(string(typeof(algorithm))).out")
+            run_experiment(fname, algorithm, gt, LAMBDA, sparsity_grid; write_output=true, kwargs...)
+        end
     end
 end
 
-# Case m > n: More samples than predictors.
-for m in size_grid
-    n = default_size
-
-    # Simulate data.
-    y, X, beta0, _, _ = simulate(m, n)
-
-    for (opt, fname) in zip(algorithms, fnames)
-        run_experiment(fname, opt, y, X, beta0, sparsity_grid,
-            tol=tol,
-            ninner=ninner,
-            nouter=nouter,
-            mult=mult,
-            proportion_train=proportion_train,
-        )
-    end
-end
-
-# Case: m < n: More predictors than samples.
-for n in size_grid
-    m = default_size
-
-    # Simulate data.
-    y, X, beta0, _, _ = simulate(m, n)
-
-    for (opt, fname) in zip(algorithms, fnames)
-        run_experiment(fname, opt, y, X, beta0, sparsity_grid,
-            tol=tol,
-            ninner=ninner,
-            nouter=nouter,
-            mult=mult,
-            proportion_train=proportion_train,
-        )
-    end
-end
+main()

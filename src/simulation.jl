@@ -63,7 +63,7 @@ function synthetic(a,b,c,d,e; rng::AbstractRNG=StableRNG(2000), prob::Real=1.0, 
         end
     end
     @info """
-    [ synthetic: $(m) instances / $(n) features ]"
+    [ synthetic: $(m) instances / $(n) features ]
         ∘ Pr(y | x) = $(prob)
         ∘ $inversions class inversions ($(inversions/m) Bayes error)
     """
@@ -132,4 +132,42 @@ function spiral(class_sizes;
     """
 
     return L, X
+end
+
+function simulate_ground_truth(m, n, k, w_range;
+    rng::AbstractRNG=Random.GLOBAL_RNG,
+    )
+    # Simulate instances.
+    X = Matrix{Float64}(undef, m, n)
+    for i in axes(X, 1)
+        @views X[i, :] .= randn(rng, n)
+    end
+    
+    StatsBase.transform!(StatsBase.fit(ZScoreTransform, X, dims=1), X)
+
+    # Set coefficients
+    wmin, wmax = w_range
+    w = zeros(n)
+    for j in 1:k
+        w_sign = rand(rng, (-1, 1))
+        w_scale = wmin + (wmax - wmin) * rand(rng)
+        w_scale = clamp(w_scale, wmin, wmax)
+        w[j] = w_sign * w_scale
+    end
+
+    # Shuffle predictors
+    perm = randperm(rng, n)
+    causal_idx = sort!(perm[1:k])
+    @. X[:, perm] = X
+    @. w[perm] = w
+
+    # Assign labels.
+    y, L = Vector{Float64}(undef, m), Vector{String}(undef, m)
+    for i in eachindex(y)
+        xi = view(X, i, :)
+        yi = sign(xi'*w)
+        y[i], L[i] = yi, ifelse(yi == 1, "A", "B")
+    end
+
+    return (; labels=L, samples=X, coeff=w, causal=causal_idx, rng=rng)
 end
