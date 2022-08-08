@@ -121,7 +121,7 @@ function cv(algorithm::AbstractLIBSVMAlgorithm, problem, lambda_grid::G, dataset
             measured_time = timed_result.time # seconds
             result.time[i,j,k] = measured_time
             statistics = timed_result.value
-            cb(statistics, problem, hyperparams, indices)
+            cb(statistics, train_problem, hyperparams, indices)
 
             # Evaluate the solution.
             r = scoref(train_problem, (train_Y, train_X), (val_Y, val_X), (test_Y, test_X))

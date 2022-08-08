@@ -75,6 +75,7 @@ struct CVStatisticsCallback <: Function
     distance::Array{Float64,3}
 
     nnz::Array{Float64,3}
+    anz::Array{Float64,3}
     nsv::Array{Float64,3}
 
     function CVStatisticsCallback(sparsity_grid, lambda_grid, nfolds)
@@ -85,7 +86,7 @@ struct CVStatisticsCallback <: Function
         return new(
             sparsity_grid, lambda_grid, nfolds, 
             alloc(), alloc(), alloc(), alloc(), alloc(), alloc(), alloc(),
-            alloc(), alloc()
+            alloc(), alloc(), alloc(),
         )
     end
 end
@@ -95,11 +96,6 @@ function (F::CVStatisticsCallback)(statistics::Vector, problem::MultiSVMProblem,
         getfield(last(replicate), field)
     end
 
-    function count_nnz(svm)
-        coeff = last(SparseSVM.get_params_proj(svm))
-        count(!isequal(0), coeff)
-    end
-
     i, j, k = indices.sparsity, indices.lambda, indices.fold
 
     F.iters[i,j,k] = mean(first, statistics)
@@ -107,7 +103,8 @@ function (F::CVStatisticsCallback)(statistics::Vector, problem::MultiSVMProblem,
         arr = getfield(F, field)
         arr[i,j,k] = mean(Base.Fix2(get_statistic, field), statistics)
     end
-    F.nnz[i,j,k] = mean(count_nnz, problem.svm)
+    F.nnz[i,j,k] = length(active_variables(problem))
+    F.anz[i,j,k] = mean(map(length, active_variable_subsets(problem)))
     F.nsv[i,j,k] = length(support_vectors(problem))
 
     return nothing
@@ -121,7 +118,8 @@ function (F::CVStatisticsCallback)(statistics::Tuple, problem::BinarySVMProblem,
         arr = getfield(F, field)
         arr[i,j,k] = getfield(last(statistics), field)
     end
-    F.nnz[i,j,k] = count(!isequal(0), last(SparseSVM.get_params_proj(problem)))
+    F.nnz[i,j,k] = length(active_variables(problem))
+    F.anz[i,j,k] = length(active_variables(problem))
     F.nsv[i,j,k] = length(support_vectors(problem))
 
     return nothing
@@ -148,8 +146,8 @@ function extract_cv_data(F::RepeatedCVCallback{CVStatisticsCallback})
     ns, nl, nfolds = size(first(F.callback_set).iters)
     alloc() = Array{Float64,4}(undef, ns, nl, nfolds, nreplicates)
 
-    fields = (:iters, :risk, :loss, :objective, :gradient, :norm, :distance, :nnz, :nsv)
-    arrays = (alloc(), alloc(), alloc(), alloc(), alloc(), alloc(), alloc(), alloc(), alloc(),)
+    fields = (:iters, :risk, :loss, :objective, :gradient, :norm, :distance, :nnz, :anz, :nsv)
+    arrays = (alloc(), alloc(), alloc(), alloc(), alloc(), alloc(), alloc(), alloc(), alloc(), alloc())
 
     for rep in 1:nreplicates
         replicate = F.callback_set[rep]

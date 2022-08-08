@@ -393,8 +393,19 @@ function support_vectors(::Nothing, problem::BinarySVMProblem)
 end
 
 function support_vectors(::Kernel, problem::BinarySVMProblem)
-    _, projected_coefficients = get_params_proj(problem)
-    return findall(!iszero, projected_coefficients)
+    a = last(get_params_proj(problem))
+    idx = findall(!isequal(0), a)
+    return sort!(idx)
+end
+
+function active_variables(problem::BinarySVMProblem)
+    w = last(get_params_proj(problem))
+    idx = findall(!isequal(0), w)
+    return sort!(idx)
+end
+
+function active_variable_subsets(problem::BinarySVMProblem)
+    return [active_variables(problem)]
 end
 
 struct MultiSVMProblem{T,S,BSVMT,dataT,kernT,stratT,encT,coeffT} <: AbstractSVM
@@ -584,24 +595,52 @@ Retrieve indices for support vectors of the multiclass SVM.
     
 This is taken as the union of support indices for every binary SVM in the multiclass reduction. 
 """
-support_vectors(problem::MultiSVMProblem) = sort!(support_vectors(problem.strategy, problem))
-
-function support_vectors(::OVR, problem::MultiSVMProblem)
+function support_vectors(problem::MultiSVMProblem)
     support_idx = Int[]
-    for binary_svm in problem.svm
-        union!(support_idx, support_vectors(binary_svm))
-    end
-    return support_idx
-end
-
-function support_vectors(::OVO, problem::MultiSVMProblem)
-    support_idx = Int[]
-    for (binary_svm, subset) in zip(problem.svm, problem.subset)
-        svm_idx = support_vectors(binary_svm)
-        idx = view(subset, svm_idx)
+    for (binary_svm, multi_svm_idx) in zip(problem.svm, problem.subset)
+        binary_svm_idx = support_vectors(binary_svm)
+        idx = __map_binary_idx_to_multi_idx__(problem.strategy, binary_svm_idx, multi_svm_idx)
         union!(support_idx, idx)
     end
-    return support_idx
+    return sort!(support_idx)
+end
+
+# in OVR all samples are used in each SVM
+__map_binary_idx_to_multi_idx__(::OVR, binary_svm_idx, multi_svm_idx) = binary_svm_idx
+
+# in OVO only a subset is used so we must map back to the original sample index
+__map_binary_idx_to_multi_idx__(::OVO, binary_svm_idx, multi_svm_idx) = view(multi_svm_idx, binary_svm_idx)
+
+active_variables(problem::MultiSVMProblem) = sort!(active_variables(problem.kernel, problem))
+
+function active_variables(::Nothing, problem::MultiSVMProblem)
+    var_idx = Int[]
+    for binary_svm in problem.svm
+        union!(var_idx, active_variables(binary_svm))
+    end
+    return var_idx
+end
+
+active_variables(::Kernel, problem::MultiSVMProblem) = support_vectors(problem)
+
+active_variable_subsets(problem::MultiSVMProblem) = active_variable_subsets(problem.kernel, problem)
+
+function active_variable_subsets(::Nothing, problem::MultiSVMProblem)
+    var_subset = Vector{Int}[]
+    for binary_svm in problem.svm
+        push!(var_subset, active_variables(binary_svm))
+    end
+    return var_subset
+end
+
+function active_variable_subsets(::Kernel, problem::MultiSVMProblem)
+    var_subset = Vector{Int}[]
+    for (binary_svm, multi_svm_idx) in zip(problem.svm, problem.subset)
+        binary_svm_idx = active_variables(binary_svm)
+        idx = __map_binary_idx_to_multi_idx__(problem.strategy, binary_svm_idx, multi_svm_idx)
+        push!(var_subset, idx)
+    end
+    return var_subset
 end
 
 """
