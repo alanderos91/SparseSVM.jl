@@ -12,20 +12,22 @@ function process_splice(local_path, dataset)
         end
 
         # Encode string sequence of nucleotides to binary format.
-        bit_sequence = BitVector(undef, 3*length(s))
+        bit_sequence = BitVector(undef, 4*length(s))
         for (i, nucleotide) in enumerate(s)
             if nucleotide == 'T'
-                x, y, z = false, false, false # T ==> [0, 0, 0]
+                w, x, y, z = false, false, false, true # T ==> [0, 0, 0, 1]
             elseif nucleotide == 'G'
-                x, y, z = false, false, true  # G ==> [0, 0, 1]
+                w, x, y, z = false, false, true, false # G ==> [0, 0, 1, 0]
             elseif nucleotide == 'C'
-                x, y, z = false, true, false  # C ==> [0, 1, 0]
+                w, x, y, z = false, true, false, false # C ==> [0, 1, 0, 0]
             else # nucleotide == 'A'
-                x, y, z = true, false, false  # A ==> [1, 0, 0]
+                w, x, y, z = true, false, false, false # A ==> [1, 0, 0, 0]
             end
-            bit_sequence[3*i-2] = x
-            bit_sequence[3*i-1] = y
-            bit_sequence[3*i] = z
+            bit_sequence[4*i-3] = w
+            bit_sequence[4*i-2] = x
+            bit_sequence[4*i-1] = y
+            bit_sequence[4*i] = z
+
         end
 
         push!(classes, c)
@@ -60,7 +62,7 @@ function process_splice(local_path, dataset)
 
     # Store row and column information.
     info_file = joinpath(dir, "$(dataset).info")
-    col_info = [["junction"]; ["site$(i)_$(j)" for i in 1:60 for j in ('A','C','G')]]
+    col_info = [["junction"]; ["site$(i)_$(j)" for i in 1:60 for j in ('A','C','G','T')]]
     col_info_df = DataFrame(cols=col_info)
     CSV.write(info_file, col_info_df; writeheader=false, delim=',', append=false)
 
@@ -77,18 +79,20 @@ push!(
     """
     ## Dataset: splice
 
-    **3 classes / 3176 instances (14 dropped) / 180 variables**
+    **3 classes / 3176 instances (14 dropped) / 240 variables**
 
     See: https://archive.ics.uci.edu/ml/datasets/Molecular+Biology+(Splice-junction+Gene+Sequences)
 
-    The original sequence of 60 nucleotides is expanded to 180 variables using the binary encoding
+    The original sequences of 60 nucleotides are expanded to 240 variables using the binary encoding
 
-        T ==> [0,0,0]
-        G ==> [0,0,1]
-        C ==> [0,1,0]
-        A ==> [1,0,0]
+        T ==> [0,0,0,1]
+        G ==> [0,0,1,0]
+        C ==> [0,1,0,0]
+        A ==> [1,0,0,0]
 
-    14 instances with ambiguous sequences are dropped.
+    14 instances with ambiguous sequences are dropped. Although representable with 3 bits, the 4 bit
+    version allows us to determine whether a site is important; e.g. does [0,0,0] mean T or not
+    important in the 3 bit version? 
     """
 )
 
