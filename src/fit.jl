@@ -6,20 +6,8 @@ Solve a classification `problem` at the specified `sparsity` level and regulariz
 The solution is obtained via a proximal distance `algorithm` that gradually anneals parameter estimates
 toward the target sparsity set.
 """
-function fit(algorithm::AbstractMMAlgorithm, problem::BinarySVMProblem, lambda::Real, sparsity::Real; kwargs...)
+function fit(algorithm::AbstractMMAlgorithm, problem, lambda::Real, sparsity::Real; kwargs...)
     extras = __mm_init__(algorithm, problem, nothing) # initialize extra data structures
-    SparseSVM.fit!(algorithm, problem, lambda, sparsity, extras, (true,false,); kwargs...)
-end
-
-"""
-    fit(algorithm, problem::MultiSVMProblem, lambda, sparsity; kwargs...)
-
-Solve a classification with nonbinary labels using multiple SVMs to define a decision boundary.
-
-The same settings (that is, `algorithm`, `sparsity`, `lambda`, ...) are applied to each SVM.
-"""
-function fit(algorithm::AbstractMMAlgorithm, problem::MultiSVMProblem, lambda::Real, sparsity::Real; kwargs...)
-    extras = [__mm_init__(algorithm, svm, nothing) for svm in problem.svm] # initialize extra data structures
     SparseSVM.fit!(algorithm, problem, lambda, sparsity, extras, (true,false,); kwargs...)
 end
 
@@ -121,7 +109,7 @@ function fit!(algorithm::AbstractMMAlgorithm, problem::MultiSVMProblem, lambda::
     if extras isa Nothing
         error("Detected missing data structures for algorithm ", (typeof(algorithm)), ".")
     end
-    
+
     # Create closure to fit a particular SVM.
     __fit__! = let algorithm=algorithm, problem=problem, lambda=lambda, sparsity=sparsity, extras=extras, update_extras=update_extras, kwargs=kwargs
         function (k)
@@ -246,7 +234,7 @@ end
 
 Fit a SVM using the L2-loss / L2-regularization model.
 """
-function fit(algorithm::AbstractMMAlgorithm, problem::BinarySVMProblem, lambda::Real; kwargs...)
+function fit(algorithm::AbstractMMAlgorithm, problem, lambda::Real; kwargs...)
     extras = __mm_init__(algorithm, problem, nothing) # initialize extra data structures
     SparseSVM.fit!(algorithm, problem, lambda, extras, true; kwargs...)
 end
@@ -315,16 +303,6 @@ function fit!(algorithm::AbstractMMAlgorithm, problem::BinarySVMProblem, lambda:
     copyto!(proj, coeff)
 
     return (iters, state)
-end
-
-"""
-```fit(algorithm, problem::MultiSVMProblem, lambda, [_extras_]; [maxiter=10^3], [gtol=1e-6], [nesterov_threshold=10])```
-
-Fit multiple SVMs using the L2-loss / L2-regularization model.
-"""
-function fit(algorithm::AbstractMMAlgorithm, problem::MultiSVMProblem, lambda::Real; kwargs...)
-    extras = [__mm_init__(algorithm, svm, nothing) for svm in problem.svm] # initialize extra data structures
-    SparseSVM.fit!(algorithm, problem, lambda, extras, true; kwargs...)
 end
 
 function fit!(algorithm::AbstractMMAlgorithm, problem::MultiSVMProblem, lambda::Real,

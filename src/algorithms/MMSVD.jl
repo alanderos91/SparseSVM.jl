@@ -32,8 +32,21 @@ function __mm_init__(::MMSVD, problem::BinarySVMProblem, ::Nothing)
     )
 end
 
+function __mm_init__(::MMSVD, problem::MultiSVMProblem, ::Nothing)
+    kernel, strategy = problem.kernel, problem.strategy
+    if kernel isa Nothing && strategy isa OVR
+        # only need 1 SVD since X and problem dimensions do not change between binary SVMs
+        extras_1 = __mm_init__(MMSVD(), problem.svm[1], nothing)
+        extras = [extras_1 for _ in problem.svm]
+    else # kernel isa Kernel || strategy isa OVO
+        # need a different SVD in each binary SVM
+        extras = [__mm_init__(MMSVD(), svm, nothing) for svm in problem.svm]
+    end
+    return extras
+end
+
 # Assume extras has the correct data structures.
-__mm_init__(::MMSVD, problem::BinarySVMProblem, extras) = extras
+__mm_init__(::MMSVD, problem, extras) = extras
 
 # Update data structures due to change in model size, k.
 __mm_update_sparsity__(::MMSVD, problem::BinarySVMProblem, lambda, rho, k, extras) = nothing

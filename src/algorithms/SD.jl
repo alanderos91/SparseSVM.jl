@@ -18,6 +18,19 @@ function __mm_init__(::SD, problem::BinarySVMProblem, ::Nothing)
     return (; projection=L0Projection(nparams), z=z, Abar=Abar,)
 end
 
+function __mm_init__(::SD, problem::MultiSVMProblem, ::Nothing)
+    kernel, strategy = problem.kernel, problem.strategy
+    if kernel isa Nothing && strategy isa OVR
+        # only need 1 problem dimensions do not change between binary SVMs
+        extras_1 = __mm_init__(SD(), problem.svm[1], nothing)
+        extras = [extras_1 for _ in problem.svm]
+    else # kernel isa Kernel || strategy isa OVO
+        # problem dimensions change so buffer sizes also change
+        extras = [__mm_init__(SD(), svm, nothing) for svm in problem.svm]
+    end
+    return extras
+end
+
 # Assume extras has the correct data structures.
 __mm_init__(::SD, problem::BinarySVMProblem, extras) = extras
 
