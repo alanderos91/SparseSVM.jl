@@ -5,6 +5,8 @@ using MKL
 
 using SparseSVM: CVStatisticsCallback, RepeatedCVCallback, extract_cv_data
 
+using LaTeXStrings, TexTables
+
 function create_classifier(::Type{BinarySVMProblem}, labeled_data, svm_kwargs)
     L, X = labeled_data
     positive_label = unique(L) |> sort |> first |> string
@@ -119,4 +121,80 @@ function extract_iters_and_stats(result::Vector)
     )
 
     return a, b
+end
+
+##### table utils #####
+
+function summarize_over_folds(df)
+    gdf = groupby(df, [:algorithm, :replicate, :lambda, :sparsity])
+    replicate_df = combine(gdf,
+        :nvars => first => :variables,
+        :iters => mean => :iterations,
+        :iters => sem => :iterations_se,
+        :time => mean => :time,
+        :time => sem => :time_se,
+        :risk => mean => :risk,
+        :risk => sem => :risk_se,
+        :gradient => mean => :gradient,
+        :gradient => sem => :gradient_se,
+        :distance => mean => :distance,
+        :distance => sem => :distance_se,
+        :norm => (x -> mean(1 ./ x)) => :margin,
+        :norm => (x -> sem(1 ./ x)) => :margin_se,
+        :nnz => mean => :nnz,
+        :nnz => sem => :nnz_se,
+        :anz => mean => :anz,
+        :anz => sem => :anz_se,
+        :nsv => mean => :nsv,
+        :nsv => sem => :nsv_se,
+        :train => (x -> 100*mean(x)) => :train,
+        :train => (x -> 100*sem(x)) => :train_se,
+        :validation => (x -> 100*mean(x)) => :validation,
+        :validation => (x -> 100*sem(x)) => :validation_se,
+        :test => (x -> 100*mean(x)) => :test,
+        :test => (x -> 100*sem(x)) => :test_se,
+    )
+    replicate_df
+end
+
+function change_formatting!(col, format::AbstractString)
+    for x in col.data.vals
+        x.format = format
+    end
+end
+
+function change_formatting!(col, format::Tuple)
+    for x in col.data.vals
+        x.format = format[1]
+        x.format_se = format[2]
+    end
+end
+
+function add_column!(cols, header, keys, df, col_index; format="{:.2f}")
+    col = TableCol(header, keys, df[!,col_index] |> Vector)
+    change_formatting!(col, format)
+    push!(cols, col)
+end
+
+function add_column_with_se!(cols, header, keys, df, col_index; format="{:.2f}")
+    col_index_se = Symbol(col_index, :_se)
+    col = TableCol(header, keys, df[!,col_index] |> Vector, df[!,col_index_se] |> Vector)
+    change_formatting!(col, format)
+    push!(cols, col)
+end
+
+function add_grouped_column!(cols, header, subheaders, keys, dfs, col_index; kwargs...)
+    tmp = []
+    for (subheader, df) in zip(subheaders, dfs)
+        add_column!(tmp, subheader, keys, df, col_index; kwargs...)
+    end
+    push!(cols, join_table(header => hcat(tmp...)))
+end
+
+function add_grouped_column_with_se!(cols, header, subheaders, keys, dfs, col_index; kwargs...)
+    tmp = []
+    for (subheader, df) in zip(subheaders, dfs)
+        add_column_with_se!(tmp, subheader, keys, df, col_index; kwargs...)
+    end
+    push!(cols, join_table(header => hcat(tmp...)))
 end

@@ -1,255 +1,409 @@
-using Dates, DataFrames, CSV, Statistics, Plots, StatsPlots, LaTeXStrings
+include("common.jl")
 
-const PALETTE = palette(:tab10)
-const MM_COLOR = PALETTE[1]
-const SD_COLOR = PALETTE[2]
+using CairoMakie
 
-default(:foreground_color_legend, nothing)
-default(:background_color_legend, nothing)
-default(:fontfamily, "Computer Modern")
-default(:dpi, 600)
-default(:legendfontsize, 8)
+function calculate_performance_metrics(df, new_col, cols)
+    TP, FP, TN, FN = map(col -> df[!,col], cols)
 
-##### helper functions #####
-function is_valid_file(file)
-    file = basename(file)
-    return startswith(file, "2-") && endswith(file, ".out")
+    P = TP + FN
+    N = TN + FP
+    T = TP + FP + TN + FN
+
+    prevalence = @. P / T
+    sensitivity = @. TP / P
+    specificity = @. TN / N
+    accuracy = @. (TP + N) / T
+
+    a = @. sensitivity * prevalence
+    b = @. (1-specificity) * (1-prevalence)
+    PPV = @. a / (a + b)
+
+    a = @. specificity * (1-prevalence)
+    b = @. (1-sensitivity) * prevalence
+    NPV = @. a / (a + b)
+
+    df[!,new_col[1]] = prevalence
+    df[!,new_col[2]] = sensitivity
+    df[!,new_col[3]] = specificity
+    df[!,new_col[4]] = accuracy
+    df[!,new_col[5]] = PPV
+    df[!,new_col[6]] = NPV
+
+    return df
 end
 
-function filter_latest(files)
-    MM_idx = findlast(contains("algorithm=MM"), files)
-    SD_idx = findlast(contains("algorithm=SD"), files)
-    return files[MM_idx], files[SD_idx]
+function get_true_sparsity(df)
+    a = 100 * (1 - df.ncausal[1] / df.nvars[1])
+    b = findfirst(isapprox(a), df.sparsity)
+    return a, b
 end
 
-function add_column!(df, alg)
-    insertcols!(df, 1, :algorithm => alg)
-end
+function add_plot(ax, dfs, cols, labels, default_kwargs)
+    mm, sd = dfs
+    xcol, ycol = cols
+    xlabel, ylabel = labels
 
-function subset_true_sparsity(df, col, k0)
-    gdfs = groupby(df, col)
-    f(n) = round(100 * (1 - k0 / n), sigdigits=4)
-    idx = [findfirst(s -> isapprox(f(gdf.n[1]), s), gdf.sparsity) for gdf in gdfs]
-    DataFrame(
-        gdf[idx[i],:] for (i,gdf) in enumerate(gdfs)
+    # MM path
+    stairs!(ax, mm[!,xcol], mm[!,ycol];
+        color=(:navy, 1.0),
+        default_kwargs...,
     )
-end
-
-# FDR; adjusted for prevalence p
-function FDR(TP, FP, TN, FN, p)
-    TPR = TP / (TP + FN) # sensitivity
-    FPR = FP / (TN + FP) # 1 - specificity
-    v = 100 * FPR * (1-p) / ( TPR * p + FPR * (1-p) )
-    v = isnan(v) ? zero(v) : isinf(v) ? 100 : v
-    return v
-end
-
-# FOR; adjusted for prevalence p
-function FOR(TP, FP, TN, FN, p)
-    TNR = TN / (TN + FP) # specificity
-    FNR = FN / (TP + FN) # 1 - sensitivity
-    v = 100 * FNR * p / ( FNR * p + TNR * (1-p) )
-    v = isnan(v) ? zero(v) : isinf(v) ? 100 : v
-    return v
-end
-
-function figure2a(MM_df, SD_df)
-    k0 = 50 # should get this from table
-    dimensions = (
-        (500, 10^4), # underdetermined 
-        (10^4, 500), # overdetermined
+    scatter!(ax, mm[!,xcol], mm[!,ycol];
+        color=(:navy, 1.0),
+        marker=:circle,
+        label="MM",
+        default_kwargs...,
     )
 
-    # Initialize the plot
-    global MM_COLOR
-    global SD_COLOR
-    colors = [MM_COLOR SD_COLOR]
-
-    sparsity = unique(MM_df.sparsity)
-    x_index = 1:length(sparsity)
-    x_ticks = (x_index, sparsity)
-    xs = repeat(x_index, 2)
-
-    nrows = 3
-    ncols = 2
-
-    w, h = default(:size)
-    fig = plot(layout=grid(nrows, ncols), grid=false, size=(1.2*w, 1.5*h),
-        xticks=x_ticks,
-        xrotation=45,
+    # SD path
+    stairs!(ax, sd[!,xcol], sd[!,ycol];
+        color=(:orange, 1.0),
+        default_kwargs...,
+    )
+    scatter!(ax, sd[!,xcol], sd[!,ycol];
+        color=(:orange, 1.0),
+        marker=:utriangle,
+        label="SD",
+        default_kwargs...,
     )
 
-    get_ylabel(idx, text) = idx == 1 ? text : ""
+    # Change tick labels so that we plot the x values on an irregular grid.
+    ax.xlabel = xlabel
+    ax.ylabel = ylabel
 
-    for (idx, (n, p)) in enumerate(dimensions)
-        col_shift = idx - 1
+    return nothing
+end
 
-        df = vcat(
-            filter([:m, :n] => (x, y) -> x == n && y == p, MM_df),
-            filter([:m, :n] => (x, y) -> x == n && y == p, SD_df),
-        )
-        prevalence = k0 / p
-        true_idx = findall(isapprox(1 - prevalence), sparsity ./ 100)
+function add_irregular_plot(ax, dfs, idx, cols, labels, default_kwargs)
+    mm, sd = dfs
+    xcol, ycol = cols
+    xlabel, ylabel = labels
+    _, true_sparsity_idx = get_true_sparsity(mm[idx,:])
 
-        options = (
-            color=colors,
-            linestyle=:dash,
-            linewidth=3,
-            shape=[:circle :utriangle],
-            markeralpha=0.5,
-            markersize=6,
-            markerstrokewidth=0,
-        )
+    # MM path
+    stairs!(ax, mm[idx,ycol];
+        color=(:navy, 1.0),
+        default_kwargs...,
+    )
+    scatter!(ax, mm[idx,ycol];
+        color=(:navy, 1.0),
+        marker=:circle,
+        label="MM",
+        default_kwargs...,
+    )
 
-        ##### Row 1: Predictive Power
-        sp = 1 + col_shift
-        @df df plot!(fig, xs, :test_acc;
-            group=:algorithm,
-            title=latexstring("n=$n,\\ p=$p"),
-            ylabel=get_ylabel(idx, "test accuracy (%)"),
-            ylims=(0, 105),
-            legend=:bottomright,
-            subplot=sp,
-            options...
-        )
-        vline!(fig, true_idx, subplot=sp, label=nothing, lw=1, ls=:solid, color=:black)
+    # SD path
+    stairs!(ax, sd[idx,ycol];
+        color=(:orange, 1.0),
+        default_kwargs...,
+    )
+    scatter!(ax, sd[idx,ycol];
+        color=(:orange, 1.0),
+        marker=:utriangle,
+        label="SD",
+        default_kwargs...,
+    )
 
-        ##### Row 2: FDR #####
-        sp = 1 + ncols + col_shift
-        @df df plot!(fig, xs, FDR.(:TP, :FP, :TN, :FN, prevalence);
-            group=:algorithm,
-            ylabel=get_ylabel(idx, "FDR (%)"),
-            ylims=(0, 105),
-            legend=:topright,
-            subplot=sp,
-            options...
-        )
-        vline!(fig, true_idx, subplot=sp, label=nothing, lw=1, ls=:solid, color=:black)
+    # Highlight the true sparsity level.
+    vlines!(ax, true_sparsity_idx, color=:black, linestyle=:dot, linewidth=5)
 
-        ##### Row 3: FOR #####
-        sp = 1 + 2*ncols + col_shift
-        @df df plot!(fig, xs, FOR.(:TP, :FP, :TN, :FN, prevalence);
-            group=:algorithm,
-            xlabel="sparsity (%)",
-            ylabel=get_ylabel(idx, "FOR (%)"),
-            ylims=(0, 10),
-            legend=:topright,
-            subplot=sp,
-            options...
-        )
-        vline!(fig, true_idx, subplot=sp, label=nothing, lw=1, ls=:solid, color=:black)
+    # Change tick labels so that we plot the x values on an irregular grid.
+    ax.xticklabelrotation = pi/4
+    ax.xticks = 1:length(idx)
+    if eltype(mm[!,xcol]) <: AbstractFloat
+        ax.xtickformat = _ -> map(x -> string(round(x, sigdigits=4)), mm[idx,xcol])
+    elseif eltype(mm[!,xcol]) <: Integer
+        ax.xtickformat = _ -> map(mm[idx,xcol]) do x
+            if x ≥ 1000
+                v = string(round(x / 1000, sigdigits=2), "k")
+            else
+                v = string(round(Int, x))
+            end
+            return v
+        end
+    end
+    ax.xlabel = xlabel
+    ax.ylabel = ylabel
+
+    return nothing
+end
+
+function add_irregular_plot2(ax, dfs, idx, cols, labels, default_kwargs)
+    mm, sd = dfs
+    xcol, ycol = cols
+    xlabel, ylabel = labels
+    _, true_sparsity_idx = get_true_sparsity(mm[idx,:])
+
+    # MM path
+    stairs!(ax, mm[idx,ycol];
+        color=(:navy, 1.0),
+        default_kwargs...,
+    )
+    scatter!(ax, mm[idx,ycol];
+        color=(:navy, 1.0),
+        marker=:circle,
+        label="MM",
+        default_kwargs...,
+    )
+
+    # SD path
+    stairs!(ax, sd[idx,ycol];
+        color=(:orange, 1.0),
+        default_kwargs...,
+    )
+    scatter!(ax, sd[idx,ycol];
+        color=(:orange, 1.0),
+        marker=:utriangle,
+        label="SD",
+        default_kwargs...,
+    )
+
+    # Change tick labels so that we plot the x values on an irregular grid.
+    ax.xticklabelrotation = pi/4
+    ax.xticks = 1:length(idx)
+    if eltype(mm[!,xcol]) <: AbstractFloat
+        ax.xtickformat = _ -> map(x -> string(round(x, sigdigits=4)), mm[idx,xcol])
+    elseif eltype(mm[!,xcol]) <: Integer
+        ax.xtickformat = _ -> map(mm[idx,xcol]) do x
+            if x ≥ 1000
+                v = string(round(x / 1000, sigdigits=2), "k")
+            else
+                v = string(round(Int, x))
+            end
+            return v
+        end
+    end
+    ax.xlabel = xlabel
+    ax.ylabel = ylabel
+
+    return nothing
+end
+
+function add_row_label(loc, label, fz)
+    Box(loc, color=:gray90)
+    Label(loc, label, rotation=pi/2, tellheight=false, textsize=2*fz)
+end
+
+function add_col_label(loc, label, fz)
+    Box(loc, color=:gray90)
+    Label(loc, label, tellwidth=false, textsize=2*fz)
+end
+
+function get_subset(df, fixed_col, fixed_value)
+    filter(row -> row.ncausal == row.k && getproperty(row, fixed_col) == fixed_value, df)
+end
+
+function main(args)
+    fz = 16
+    w, h = 450, 250
+    default_kwargs = (;
+        markersize=20,
+        linewidth=5,
+    )
+    axis_kwargs = (;
+        width=w,
+        height=h,
+        xlabelsize=2*fz,
+        ylabelsize=2*fz,
+        xticklabelsize=1.5*fz,
+        yticklabelsize=1.5fz,
+    )
+    dir, outdir = args[1], args[2]
+    pad = 5e-2
+
+    grouping_cols = [:nsamples, :nvars, :ncausal]
+    mmdf = CSV.read(joinpath(dir, "MMSVD.out"), DataFrame) |> Base.Fix2(unique!, [grouping_cols; :k])
+    sddf = CSV.read(joinpath(dir, "SD.out"), DataFrame) |> Base.Fix2(unique!, [grouping_cols; :k])
+
+    ##### IMPORTANT #####
+    # Filter out cases where k = 0 implying w = 0.
+    # Predictions will be sgn(x_iᵀ*0) = ±0.0 will artificially arrive at the correct label prediction.
+    # This is because decisions f(-0.0) = -1 and f(0.0) = +1 due to MLDataUtils.LabelEnc.MarginBased,
+    # and the labels were generated exactly using sgn(x_iᵀ*w).
+    # In otherwords, it is a useful check but otherwise meaningless.
+    filter!(row -> row.k != 0, mmdf)
+    filter!(row -> row.k != 0, sddf)
+    
+    data_cols = (:TP, :FP, :TN, :FN)
+    metrics = (:Prevalence, :Sensitivity, :Specificity, :Accuracy, :PPV, :NPV)
+    for df in (mmdf, sddf), col_group in (:w, :train, :test)
+        inputs = map(x -> Symbol(col_group, x), data_cols)
+        outputs = map(x -> Symbol(col_group, x), metrics)
+        calculate_performance_metrics(df, outputs, inputs)
     end
 
-    return fig
-end
+    mmgdf = groupby(mmdf, grouping_cols)
+    sdgdf = groupby(sddf, grouping_cols)
 
-function figure2b(MM_df, SD_df)
-    k0 = 50 # should get this from table
+    fig = Figure(resolution=(800,600))
 
-    dimension = ( (:m, :n, 500), (:n, :m, 500) )
-
-    df = [
-        # underdetermined
-        vcat(
-            subset_true_sparsity(filter(:m => x -> x == 500, MM_df), :n, k0),
-            subset_true_sparsity(filter(:m => x -> x == 500, SD_df), :n, k0),
-        ),
-        # overdetermined
-        vcat(
-            subset_true_sparsity(filter(:n => x -> x == 500, MM_df), :m, k0),
-            subset_true_sparsity(filter(:n => x -> x == 500, SD_df), :m, k0),
-        )
-    ]
-
-    # Initialize the plot
-    global MM_COLOR
-    global SD_COLOR
-    colors = [MM_COLOR SD_COLOR]
-
-    nrows = 4
-    ncols = 2
-
-    w, h = default(:size)
-    fig = plot(layout=grid(nrows, ncols), legend=:topleft, grid=false, size=(1.2*w, 1.5*h))
-    options = (
-        xscale=:log10,
-        color=colors,
-        linestyle=:dash,
-        linewidth=3,
-        markershape=[:circle :utriangle],
-        markeralpha=0.5,
-        markersize=6,
-        markerstrokewidth=0,
+    # Figure 2A
+    fig2A = fig[1,1] = GridLayout()
+    example_dfs = ( (mmgdf[5], sdgdf[5]), (mmgdf[14], sdgdf[14]) )
+    xcols = (:k, :k, :k, :k)
+    ycols = (:trainAccuracy, :testAccuracy, :wPPV, :wNPV)
+    lookup_label = Dict(
+        :k => latexstring("Active Variables ", L"k"),
+        :trainAccuracy => "Accuracy",
+        :testAccuracy => "Accuracy",
+        :wPPV => "PPV",
+        :wNPV => "NPV",
     )
     
-    xlabel = ["# features (p)", "# samples (n)"]
-    get_ylabel(idx, text) = idx == 1 ? text : ""
-    legpos = [:topleft, :topright, :topleft, :topleft, :topleft, :topleft, :topleft, :topleft]
-
-    for idx in eachindex(df)
-        data = df[idx]
-        col_shift = idx - 1
-        fixed_dim, free_dim, fixed_val = dimension[idx]
-        title = latexstring(fixed_dim == :m ? :n : :p, " = ", fixed_val)
-        dimension_vals = repeat(unique(data[!, free_dim]), 2)
-        
-        feature_vals = unique(data[!, :n])
-        if length(feature_vals) > 1
-            prevalence = k0 ./ repeat(feature_vals, 2)
-        else
-            prevalence = k0 / feature_vals[1]
-        end
-
-        ##### Row 1: Iterations #####
-        sp = 1 + col_shift
-        @df data plot!(fig, dimension_vals, :iter; group=:algorithm, subplot=sp, title=title, ylabel=get_ylabel(idx, "iterations"), legend=legpos[sp], options...)
-
-        ##### Row 2: Time #####
-        sp = 1 + ncols + col_shift
-        @df data plot!(fig, dimension_vals, :time; group=:algorithm, subplot=sp, ylabel=get_ylabel(idx, "time (s)"), legend=legpos[sp], options...)
-
-        ##### Row 3: FDR #####
-        sp = 1 + 2*ncols + col_shift
-        @df data plot!(fig, dimension_vals, FDR.(:TP, :FP, :TN, :FN, prevalence); group=:algorithm, subplot=sp, ylabel=get_ylabel(idx, "FDR (%)"), ylims=(0, 105), legend=legpos[sp], options...)
-
-        ##### Row 4: FOR #####
-        sp = 1 + 3*ncols + col_shift
-        @df data plot!(fig, dimension_vals, FOR.(:TP, :FP, :TN, :FN, prevalence); group=:algorithm, subplot=sp, ylabel=get_ylabel(idx, "FOR (%)"), ylims=(0, 10), xlabel=xlabel[idx], legend=legpos[sp], options...)
+    for (i, (mm, _)) in enumerate(example_dfs)
+        loc = fig2A[1+i,1]
+        n, p = mm.nsamples[1], mm.nvars[1]
+        label = "$n samples\n$p variables"
+        add_row_label(loc, label, fz)
     end
 
-    return fig
-end
+    add_col_label(fig2A[1,2], "Training Set", fz)
+    add_col_label(fig2A[1,3], "Test Set", fz)
+    add_col_label(fig2A[1,4:5], "Coefficients", fz)
 
-function main()
-    # Get script arguments.
-    idir = ARGS[1]
-    odir = ARGS[2]
+    ax = [Axis(fig2A[1+i,1+j]; axis_kwargs...) for i in 1:2, j in 1:4]
+    for i in 1:2
+        for j in 1:2
+            ylims!(ax[i,j], 0.5-pad, 1.0+pad)
+            ax[i,j].yticks = 0.5:0.1:1.0
+        end
+        linkaxes!(ax[i,1:2]...)
 
-    dir = joinpath(idir, "experiment2")
-    files = readdir(dir, join=true)
-        
-    # Filter for lastest results for Experiment 2.
-    filter!(is_valid_file, files)
-    MM_file, SD_file = filter_latest(files)
+        for j in 3:4
+            ylims!(ax[i,j], 0.0-pad, 1.0+pad)
+            ax[i,j].yticks = 0.0:0.2:1.0
+        end
+        linkaxes!(ax[i,3:4]...)
+    end
+    
+    for (j, (xcol, ycol)) in enumerate(zip(xcols, ycols)), (i, dfs) in enumerate(example_dfs)
+        idx = [1:2:16; 17:nrow(dfs[1])]
+        xlabel, ylabel = lookup_label[xcol], lookup_label[ycol]
+        add_irregular_plot(ax[i,j], dfs, idx, (xcol, ycol), (xlabel, ylabel), default_kwargs)
+    end
 
-    println("""
-        Processing...
-            - MM file: $(MM_file)
-            - SD file: $(SD_file)
-    """
+    # Figure 2B
+    fig2B = fig[2,1] = GridLayout()
+
+    nvars = nsamples = 500
+    for (i, label) in enumerate(("$nvars variables", "$nsamples samples"))
+        loc = fig2B[1+i,1]
+        add_row_label(loc, label, fz)
+    end
+
+    add_col_label(fig2B[1,2:3], "Training Set", fz)
+    add_col_label(fig2B[1,4:5], "Coefficients", fz)
+
+    yscales = [log10, log10, identity, identity]
+    ax = [Axis(fig2B[1+i,1+j]; yscale=yscales[j], xscale=log10, xticks=[1e3,1e4,1e5], axis_kwargs...) for i in 1:2, j in 1:4]
+    foreach(j -> linkaxes!(ax[1:2,j]...), 1:4)
+    linkaxes!(ax[1,3:4]...)
+
+    example_dfs = (
+        (get_subset(mmdf, :nvars, nvars), get_subset(sddf, :nvars, nvars)),             # overdetermined
+        (get_subset(mmdf, :nsamples, nsamples), get_subset(sddf, :nsamples, nsamples)), # underdetermined 
+    )
+    xcols =(:nsamples, :nvars)
+    xlabels = ("Total Samples", "Total Variables")
+
+    for (i, (dfs, xcol, xlabel)) in enumerate(zip(example_dfs, xcols, xlabels))
+        add_plot(ax[i,1], dfs, (xcol, :iters), (xlabel, "Iterations"), default_kwargs)
+        add_plot(ax[i,2], dfs, (xcol, :time), (xlabel, "Time [s]"), default_kwargs)
+        add_plot(ax[i,3], dfs, (xcol, :wPPV), (xlabel, "PPV"), default_kwargs)
+        add_plot(ax[i,4], dfs, (xcol, :wNPV), (xlabel, "NPV"), default_kwargs)
+
+        ylims!(ax[i,4], 0-pad, 1+pad)
+        ax[i,3].yticks = LinearTicks(6)
+        ax[i,4].yticks = LinearTicks(6)
+    end
+
+    # Add manual Legend
+    mm_entry = [
+        LineElement(color=:navy, linewidth=default_kwargs.linewidth),
+        MarkerElement(color=:navy, marker=:circle, markersize=1.5*default_kwargs.markersize)
+    ]
+    sd_entry = [
+        LineElement(color=:orange, linewidth=default_kwargs.linewidth),
+        MarkerElement(color=:orange, marker=:utriangle, markersize=1.5*default_kwargs.markersize)
+    ]
+    fig[3,1] = Legend(fig, [mm_entry, sd_entry], ["MM", "SD"], "Algorithm",
+        framevisible=false,
+        titlesize=2.5*fz,
+        labelsize=2*fz,
+        patchsize=(80,60),
+        orientation=:horizontal,
+        nbanks=1,
+        tellwidth=false,
+        tellheight=true,
+        colgap=250,
     )
 
-    MM_df = CSV.read(MM_file, DataFrame)
-    add_column!(MM_df, :MM)
+    # Add padding on the left and right
+    fig[1:2,0] = GridLayout()
+    fig[1:2,2] = GridLayout()
 
-    SD_df = CSV.read(SD_file, DataFrame)
-    add_column!(SD_df, :SD)
+    resize_to_layout!(fig)
 
-    fig2A = figure2a(MM_df, SD_df)
-    savefig(fig2A, joinpath(odir, "Fig2A.png"))
+    save(joinpath(outdir, "Fig2.pdf"), fig, pt_per_unit=2)
 
-    fig2B = figure2b(MM_df, SD_df)
-    savefig(fig2B, joinpath(odir, "Fig2B.png"))
+    # Supplement: # of support vectors vs sparsity
+    fig = Figure(resolution=(800,600))
+    g = fig[1,1] = GridLayout()
+    fig[1:2,0] = GridLayout()
+    fig[1:2,2] = GridLayout()
+
+    example_dfs = [
+                    (mmgdf[1], sdgdf[5])      (mmgdf[10], sdgdf[10])
+                    (mmgdf[1], sdgdf[5])      (mmgdf[14], sdgdf[14])
+                ]
+
+    for i in axes(example_dfs, 1)
+        loc = g[1+i,1]
+        n = example_dfs[i,1][1].nsamples[1]
+        label = "$n samples"
+        add_row_label(loc, label, fz)
+    end
+
+    for j in axes(example_dfs, 2)
+        loc = g[1,1+j]
+        p = example_dfs[1,j][1].nsamples[1]
+        label = "$p variables"
+        add_col_label(loc, label, fz)
+    end
+
+    ax = [Axis(g[1+i,1+j]; axis_kwargs...) for i in axes(example_dfs, 1), j in axes(example_dfs, 2)]
+    for j in axes(ax, 2), i in axes(ax, 1)
+        dfs = example_dfs[i,j]
+        idx = [1:2:16; 17:nrow(dfs[1])]
+        add_irregular_plot2(ax[i,j], dfs, idx, (:k, :nSV), ("Active Variables", "Support Vectors"), default_kwargs)
+    end
+
+    # Add manual Legend
+    mm_entry = [
+        LineElement(color=:navy, linewidth=default_kwargs.linewidth),
+        MarkerElement(color=:navy, marker=:circle, markersize=1.5*default_kwargs.markersize)
+    ]
+    sd_entry = [
+        LineElement(color=:orange, linewidth=default_kwargs.linewidth),
+        MarkerElement(color=:orange, marker=:utriangle, markersize=1.5*default_kwargs.markersize)
+    ]
+    fig[2,1] = Legend(fig, [mm_entry, sd_entry], ["MM", "SD"], "Algorithm",
+        framevisible=false,
+        titlesize=2.5*fz,
+        labelsize=2*fz,
+        patchsize=(80,60),
+        orientation=:horizontal,
+        nbanks=1,
+        tellwidth=false,
+        tellheight=true,
+        colgap=250,
+    )
+
+    resize_to_layout!(fig)
+
+    save(joinpath(outdir, "SFig1.pdf"), fig, pt_per_unit=2)
+
+    return nothing
 end
 
-main()
+main(ARGS)

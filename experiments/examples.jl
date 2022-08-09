@@ -1,4 +1,4 @@
-const MAXITER_PER_RHO = 10^5
+const MAXITER_PER_RHO = 10^4
 const MAXITER_ANNEAL = 10^2
 const RHO_INIT = 1.0
 const RHO_MAX = 1e8
@@ -312,7 +312,7 @@ const OPTIONS = Dict(
         ),
         (;
             dtol=1e-3,
-            gtol=2e-4,
+            gtol=1e-4,
             rtol=1e-6,
             maxiter=MAXITER_PER_RHO,
             ninner=MAXITER_PER_RHO,
@@ -320,7 +320,7 @@ const OPTIONS = Dict(
             rho_init=RHO_INIT,
             rho_max=RHO_MAX,
             rhof=RHOF,
-            nesterov_threshold=NESTEROV_DELAY,
+            nesterov_threshold=100,
         ),
         (;
             data_transform=ZScoreTransform,
@@ -416,8 +416,9 @@ function make_sparsity_grid(n, m)
             push!(xs, i/n)
         end
     end
+    push!(xs, 0.0)
 
-    return unique!(xs)
+    return sort!(unique!(xs))
 end
 
 function make_lambda_grid(a, b, m)

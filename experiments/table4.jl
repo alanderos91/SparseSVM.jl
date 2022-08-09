@@ -1,132 +1,110 @@
-using Dates, DataFrames, CSV, Statistics, Latexify, LaTeXStrings
+include("common.jl")
 
-##### helper functions #####
-function is_valid_file(file)
-    file = basename(file)
-    return startswith(file, "4-") && endswith(file, ".out")
+get_grids(df) = unique(df.sparsity), unique(df.lambda)
+
+function set_sigdigits(output, metric, n)
+    output[!,metric] .= round.(output[!,metric], sigdigits=n)
 end
 
-function filter_latest(files)
-    idx = findlast(contains("algorithm=all"), files)
-    return files[idx]
-end
+function main(args)
+    dir, outdir = args[1], args[2]
+    examples = args[3:end]
 
-function aggregate_metrics(df)
-    gdf = groupby(df, :value)
-    combine(gdf,
-        [:alg, :time, :train_acc, :val_acc, :test_acc, :sparsity] =>
-        ( (alg,a,b,c,d,e) -> (
-            alg=first(alg),
-            time=mean(a),
-            train_acc=mean(b),
-            val_acc=mean(c),
-            test_acc=mean(d),
-            sparsity=mean(e),
-        )) =>
-    AsTable)
-end
+    # load repeated cv results and summarize over folds within reach replicate
+    tmp = []
+    for example in examples
+        filepath = joinpath("results", example, dir, "cv-result.out")
+        if ispath(filepath)
+            tmpdf = summarize_over_folds(CSV.read(filepath, DataFrame))
+            tmpdf[!,:example] .= example
+            push!(tmp, tmpdf)
+        end
 
-function subset_max_accuracy(df)
-    idx = argmax(df.val_acc)
-    result = df[idx, :]
-    result.time = sum(df.time)
-    return DataFrame(result)
-end
-
-function table3(idir, datasets)
-    ALGORITHMS = ("MM", "SD", "L2R", "L1R", "SVC")
-
-    result = DataFrame()
-
-    for (i, dataset) in enumerate(datasets)
-        dir = joinpath(idir, dataset)
-        files = readdir(dir, join=true)
-        
-        # Filter for Experiment 4.
-        filter!(is_valid_file, files)
-
-        # Filter for latest results.
-        file = filter_latest(files)
-
-        # Process the raw dataframe.
-        println("""
-            Processing: $(file)
-        """
-        )
-
-        df = CSV.read(file, DataFrame)
-        alg_vals = unique(df.alg)
-        # For each algorithm tested...
-        for alg in ALGORITHMS
-            if alg ∉ df.alg continue end
-
-            # Aggregate performance metrics over CV folds.
-            tmp = aggregate_metrics(filter(:alg => isequal(alg), df))
-            if alg in ("MM", "SD")
-                tmp.value .*= 100
-            end
-
-            # Select representative results based on prediction accuracy.
-            result = vcat(result,
-                subset_max_accuracy(insertcols!(tmp, 1, :dataset => dataset)))
+        filepath = joinpath("results", example, dir, "cv-libsvm-result.out")
+        if ispath(filepath)
+            tmpdf = summarize_over_folds(CSV.read(filepath, DataFrame))
+            tmpdf[!,:example] .= example
+            push!(tmp, tmpdf)
         end
     end
+    df = vcat(tmp...)
 
-    # Tidy up table.
-    sort!(result, [:dataset])
-    select!(result,
-        [:dataset, :alg, :value, :time, :train_acc, :val_acc, :test_acc, :sparsity])
-
-    # Create a number formatter to handle scientific notation
-    fancy = FancyNumberFormatter(4)
-
-    # Eliminate duplicate values in first column to make reading a little easier.
-    unique_vals = unique(result.dataset)
-    col1 = Vector{String}(undef, nrow(result))
-    cur_val = -1 # assume column we scan does not contain -1
-    for (i, row) in enumerate(eachrow(result))
-        # found a duplicate entry, so make it blank
-        if row.dataset == cur_val
-            col1[i] = ""
-        else # otherwise use the same value and update cur_val
-            col1[i] = string(fancy(row.dataset))
-            cur_val = row.dataset
-        end
+    # find optimal model for each CV replicate
+    gdf = groupby(df, [:example, :algorithm, :replicate])
+    metric = :validation
+    optimal_model = []
+    for i in eachindex(gdf)
+        ss, ls = get_grids(gdf[i])
+        data = reshape(gdf[i][!,metric], length(ss), length(ls))
+        push!(optimal_model, i => SparseSVM.search_hyperparameters(ss, ls, data, minimize=false))
     end
-    result.dataset = col1
 
-    # Create header and formatting function.
-    header = [
-        "Dataset", "Alg.", latexstring(L"s", " (\\%)", " or ", L"C"),
-        "Total Time (s)", "Tr (\\%)", "V (\\%)", "T (\\%)", "Sparsity"
-    ]
+    # select record corresponding to optimal model in each CV replicate
+    tmp = []
+    for (key, val) in optimal_model
+        ss, ls = get_grids(gdf[key])
+        i, j, _ = val
+        row_idx = findfirst(row -> row.sparsity==ss[i] && row.lambda==ls[j], eachrow(gdf[key]))
+        tmpdf = DataFrame()
+        push!(tmpdf, gdf[key][row_idx,:])
+        tmpdf.time .= sum(gdf[key].time)
+        push!(tmp, tmpdf)
+    end
 
-    fmt(x) = x # default: no formatting
-    fmt(x::Number) = latexstring(x) # make numbers a LaTeXString
-    fmt(x::AbstractFloat) = latexstring(fancy(x)) # scientific notation for floats
+    # summarize over replicates
+    output = combine(groupby(vcat(tmp...), [:example, :algorithm]),
+        :lambda => mean => :lambda,
+        :variables => mean => :variables,
+        :time => mean => :time,
+        :nnz => mean => :nnz,
+        :anz => mean => :anz,
+        :nsv => mean => :nsv,
+        :train => mean => :train,
+        :validation => mean => :validation,
+        :test => mean => :test,
+    )
 
-    # modify dataset column to use \texttt
-    result.dataset = map(x -> "\\texttt{$(x)}", result.dataset)
+    # significant digits
+    set_sigdigits(output, :time, 3)
+    set_sigdigits(output, :train, 4)
+    set_sigdigits(output, :validation, 4)
+    set_sigdigits(output, :test, 4)
 
-    # Pass to latexify to create the table.
-    return latexify(result, env=:table, booktabs=true, latex=false,
-        head=header, fmt=fmt, adjustment=:r)
+    # # strip repeated row information
+    # for example in examples
+    #     i = findfirst(isequal(example), output.example)
+    #     for j in setdiff(findall(isequal(example), output.example), i)
+    #         output[j,:example] = ""
+    #     end
+    # end
+
+    rows = []
+    for example in examples
+        subset = filter(row -> row.example == example, output)
+        keys = map(x -> Symbol(x), eachindex(unique(subset.algorithm)))
+
+        cols = []
+        add_column!(cols, "Example", keys, subset, :example, format="{:s}")
+        add_column!(cols, "Algorithm", keys, subset, :algorithm, format="{:s}")
+        add_column!(cols, "\$\\lambda\$", keys, subset, :lambda, format="{:4.2f}")
+        add_column!(cols, "\$k\$", keys, subset, :variables, format="{:.0f}")
+        add_column!(cols, "Total Time [s]", keys, subset, :time, format="{:3.3f}")
+        add_column!(cols, "Total", keys, subset, :nnz, format="{:.0f}")
+        add_column!(cols, "Average", keys, subset, :anz, format="{:.0f}")
+        add_column!(cols, "Support Vectors", keys, subset, :nsv, format="{:.0f}")
+        add_column!(cols, "Train", keys, subset, :train, format="{:.0f}")
+        add_column!(cols, "Validation", keys, subset, :validation, format="{:.0f}")
+        add_column!(cols, "Test", keys, subset, :test, format="{:.0f}")
+
+        push!(rows, hcat(cols...))
+    end
+
+    tab = vcat(rows...)
+    open(joinpath(outdir, "Table4.tex"), "w") do io
+        write(io, to_tex(tab))
+    end
+
+    return output, tab
 end
 
-function main()
-    # Get script arguments.
-    idir = ARGS[1]
-    odir = ARGS[2]
-    datasets = [
-        "breast-cancer-wisconsin", "iris", "letter-recognition", "optdigits",
-        "spiral", "splice", "synthetic", "TCGA-PANCAN-HiSeq"
-    ]
-
-    tab3 = table3(idir, datasets)
-
-    open(joinpath(odir, "Table3.tex"), "w") do io
-        write(io, tab3)
-    end
-end
-
-main()
+main(ARGS)

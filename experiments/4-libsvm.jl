@@ -5,12 +5,12 @@ include("common.jl")
 global_logger(ConsoleLogger(stdout))
 
 # Header for cross validatiton table.
-cv_table_header() = join(("algorithm","replicate","fold","lambda","sparsity","nnz",
+cv_table_header() = join(("algorithm","replicate","fold","lambda","sparsity","nvars",
 "iters","risk","loss","objective","gradient","norm","distance",
-"time","train","validation","test"), ',')
+"time","train","validation","test","nnz","anz","nsv"), ',')
 
 # Header for comparison table.
-comparison_table_header() = join(("algorithm", "model", "lambda", "sparsity", "nnz", "train", "test", "iterations", "risk", "loss", "objective", "distance", "gradient", "norm", "nsv"), ',')
+comparison_table_header() = join(("algorithm", "model", "lambda", "sparsity", "nvars", "train", "test", "iterations", "risk", "loss", "objective", "distance", "gradient", "norm", "nnz", "anz", "nsv"), ',')
 
 function run_experiment(paths, dataset, svm_type, algorithm, lambda_grid, kwargs, need_shuffle)
     # Unpack tuple arguments.
@@ -82,8 +82,8 @@ function run_experiment(paths, dataset, svm_type, algorithm, lambda_grid, kwargs
         x = cv_scores.time
         is, js, ks, rs = axes(x)
         for r in rs, k in ks, j in js, i in is
-            cv_data = (alg_str, r, k, lambda_grid[j], sparsity_grid[i],
-                cv_extras.nnz[i,j,k,r],
+            nvars = SparseSVM.sparsity_to_k(problem, sparsity_grid[i])
+            cv_data = (alg_str, r, k, lambda_grid[j], sparsity_grid[i], nvars,
                 cv_extras.iters[i,j,k,r],
                 cv_extras.risk[i,j,k,r],
                 cv_extras.loss[i,j,k,r],
@@ -95,6 +95,9 @@ function run_experiment(paths, dataset, svm_type, algorithm, lambda_grid, kwargs
                 cv_scores.train[i,j,k,r],
                 cv_scores.validation[i,j,k,r],
                 cv_scores.test[i,j,k,r],
+                cv_extras.nnz[i,j,k,r],
+                cv_extras.anz[i,j,k,r],
+                cv_extras.nsv[i,j,k,r],
             )
             write(io, join(cv_data, ','), "\n")
         end
@@ -128,9 +131,11 @@ function run_experiment(paths, dataset, svm_type, algorithm, lambda_grid, kwargs
     @info "Sparse SVM results" train_accuracy=train_accuracyA test_accuracy=test_accuracyA iterations=itersA statsA...
 
     open(compare_fname, "a") do io
-        nnz = count(!isequal(0), last(SparseSVM.get_params_proj(problemA)))
+        nvars = SparseSVM.sparsity_to_k(problemA, sparsity_opt)
+        nnz = SparseSVM.active_variables(problemA) |> length
+        anz = map(length, SparseSVM.active_variable_subsets(problemA)) |> mean
         nsv = SparseSVM.support_vectors(problemA) |> length
-        rowA = (alg_str, "sparse", lambda_opt, sparsity_opt, nnz, train_accuracyA, test_accuracyA, itersA, statsA..., nsv)
+        rowA = (alg_str, "sparse", lambda_opt, sparsity_opt, nvars, train_accuracyA, test_accuracyA, itersA, statsA..., nnz, anz, nsv)
         write(io, join(rowA, ','), "\n")
     end
 

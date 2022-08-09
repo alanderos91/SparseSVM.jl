@@ -1,127 +1,51 @@
-using Dates, DataFrames, CSV, Statistics, Latexify, LaTeXStrings
+include("common.jl")
 
-##### helper functions #####
-function is_valid_file(file)
-    file = basename(file)
-    return startswith(file, "3-") && endswith(file, ".out")
-end
+function main(args)
+    dir, outdir = args[1], args[2]
+    examples = args[3:end]
 
-function filter_latest(files)
-    idx = findlast(contains("algorithm=all"), files)
-    return files[idx]
-end
-
-const METRICS = [
-    :iter, :time, :obj, :val_acc, :test_acc
-]
-
-function aggregate_metrics(df)
-    gdf = groupby(df, :sparsity)
-    combine(gdf,
-        [:alg, :iter, :time, :obj, :train_acc, :val_acc, :test_acc] =>
-        ( (alg,a,b,c,d,e,f) -> (
-            alg=first(alg),
-            iter=mean(a),
-            time=mean(b),
-            obj=mean(c),
-            val_acc=mean(e),
-            test_acc=mean(f),
-        )) =>
-    AsTable)
-end
-
-function subset_max_accuracy(df)
-    F = [(r.val_acc, r.sparsity) for r in eachrow(df)]
-    result = df[argmax(F), :]
-    result.time = sum(df.time)
-    result.iter = sum(df.iter)
-    return DataFrame(result)
-end
-
-function table2(idir, datasets)
-    result = DataFrame()
-
-    for (i, dataset) in enumerate(datasets)
-        dir = joinpath(idir, dataset)
-        files = readdir(dir, join=true)
-        
-        # Filter for Experiment 3.
-        filter!(is_valid_file, files)
-
-        # Filter for latest results.
-        file = filter_latest(files)
-
-        # Process the raw dataframe.
-        println("""
-            Processing: $(file)
-        """
-        )
-
-        df = CSV.read(file, DataFrame, comment="alg", header=[
-            "alg", "fold", "sparsity", "time", "sv", "iter", "obj", "dist", "gradsq", "train_acc", "val_acc", "test_acc"]
-            )
-        MM_df = aggregate_metrics(filter(:alg => x -> x == "MM", df))
-        SD_df = aggregate_metrics(filter(:alg => x -> x == "SD", df))
-        for df in (MM_df, SD_df)
-            tmp = subset_max_accuracy(insertcols!(df, 1, :dataset => dataset))
-            result = vcat(result, tmp)
+    # load repeated cv results and summarize over folds within reach replicate
+    tmp = []
+    for example in examples
+        filepath = joinpath("results", example, dir, "cv-comparison.out")
+        if ispath(filepath)
+            tmpdf = CSV.read(filepath, DataFrame)
+            tmpdf[!,:example] .= example
+            push!(tmp, tmpdf)
         end
     end
+    output = vcat(tmp...)
 
-    # Tidy up table.
-    global METRICS
-    sort!(result, [:dataset, :alg])
-    select!(result, [:dataset; :alg; :sparsity; METRICS])
+    output.sparsity .*= 100
+    output.train .*= 100
+    output.test .*= 100
+    output.margin = 1 ./ output.norm
 
-    # Create a number formatter to handle scientific notation
-    fancy = FancyNumberFormatter(4)
+    rows = []
+    for example in examples
+        subset = filter(row -> row.example == example, output)
+        keys = map(x -> Symbol(uppercasefirst(x)), unique(subset.model))
 
-    # Eliminate duplicate values in first column to make reading a little easier.
-    unique_vals = unique(result.dataset)
-    col1 = Vector{String}(undef, nrow(result))
-    cur_val = -1 # assume column we scan does not contain -1
-    for (i, row) in enumerate(eachrow(result))
-        # found a duplicate entry, so make it blank
-        if row.dataset == cur_val
-            col1[i] = ""
-        else # otherwise use the same value and update cur_val
-            col1[i] = string(fancy(row.dataset))
-            cur_val = row.dataset
-        end
+        cols = []
+        add_column!(cols, "Example", keys, subset, :example, format="{:s}")
+        add_column!(cols, "\$\\lambda\$", keys, subset, :lambda, format="{:4.2f}")
+        add_column!(cols, "\$k\$", keys, subset, :nvars, format="{:d}")
+        add_column!(cols, "Active Variables", keys, subset, :nnz, format="{:.0f}")
+        add_column!(cols, "Active Variables (average)", keys, subset, :anz, format="{:.0f}")
+        add_column!(cols, "Support Vectors", keys, subset, :nsv, format="{:.0f}")
+        add_column!(cols, "Margin", keys, subset, :margin, format="{:4.2f}")
+        add_column!(cols, "Train (\\%)", keys, subset, :train, format="{:3.0f}")
+        add_column!(cols, "Test (\\%)", keys, subset, :test, format="{:3.0f}")
+
+        push!(rows, hcat(cols...))
     end
-    result.dataset = col1
 
-    # Create header and formatting function.
-    header = [
-        "Dataset", "Alg.", latexstring(L"s", " (\\%)"), "Total Iter.", "Total Time (s)",
-        "Objective", "V (\\%)", "T (\\%)"
-    ]
-    fmt(x) = x # default: no formatting
-    fmt(x::Number) = latexstring(x) # make numbers a LaTeXString
-    fmt(x::AbstractFloat) = latexstring(fancy(x)) # scientific notation for floats
+    tab = vcat(rows...)
+    open(joinpath(outdir, "Table3.tex"), "w") do io
+        write(io, to_tex(tab))
+    end
 
-    # modify dataset column to use \texttt
-    result.dataset = map(x -> "\\texttt{$(x)}", result.dataset)
-
-    # Pass to latexify to create the table.
-    return latexify(result, env=:table, booktabs=true, latex=false,
-        head=header, fmt=fmt, adjustment=:r)
+    return output, tab
 end
 
-function main()
-    # Get script arguments.
-    idir = ARGS[1]
-    odir = ARGS[2]
-    datasets = [
-        "breast-cancer-wisconsin", "iris", "letter-recognition", "optdigits",
-        "spiral", "splice", "synthetic", "TCGA-PANCAN-HiSeq"
-    ]
-
-    tab2 = table2(idir, datasets)
-
-    open(joinpath(odir, "Table2.tex"), "w") do io
-        write(io, tab2)
-    end
-end
-
-main()
+main(ARGS)

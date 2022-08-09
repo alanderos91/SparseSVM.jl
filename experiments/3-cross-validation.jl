@@ -5,12 +5,12 @@ include("common.jl")
 global_logger(ConsoleLogger(stdout))
 
 # Header for cross validatiton table.
-cv_table_header() = join(("algorithm","replicate","fold","lambda","sparsity","nnz",
+cv_table_header() = join(("algorithm","replicate","fold","lambda","sparsity","nvars",
 "iters","risk","loss","objective","gradient","norm","distance",
-"time","train","validation","test"), ',')
+"time","train","validation","test","nnz","anz","nsv"), ',')
 
 # Header for comparison table.
-comparison_table_header() = join(("algorithm", "model", "lambda", "sparsity", "nnz", "train", "test", "iterations", "risk", "loss", "objective", "distance", "gradient", "norm", "nsv"), ',')
+comparison_table_header() = join(("algorithm", "model", "lambda", "sparsity", "nvars", "train", "test", "iterations", "risk", "loss", "objective", "distance", "gradient", "norm", "nnz", "anz", "nsv"), ',')
 
 function run_experiment(paths, dataset, svm_type, algorithm, grids, kwargs, need_shuffle)
     # Unpack tuple arguments.
@@ -53,10 +53,11 @@ function run_experiment(paths, dataset, svm_type, algorithm, grids, kwargs, need
     problem = create_classifier(svm_type, shuffled_data, svm_kwargs)
 
     # Precompile.
-    tmp_fit_kwargs = (; fit_kwargs..., ninner=3, nouter=3, maxiter=3,)
-    tmp_cv_kwargs = (; cv_kwargs..., nreplicates=3, nfolds=3,)
-    cb = RepeatedCVCallback{CVStatisticsCallback}(sparsity_grid, lambda_grid, 3, 3)
-    SparseSVM.repeated_cv(algorithm, problem, grids;
+    tmp_grids = [0.0,0.5,1.0], [0.1,1.0]
+    tmp_fit_kwargs = (; fit_kwargs..., ninner=2, nouter=2, maxiter=2,)
+    tmp_cv_kwargs = (; cv_kwargs..., nreplicates=2, nfolds=2,)
+    cb = RepeatedCVCallback{CVStatisticsCallback}(tmp_grids[1], tmp_grids[2], tmp_cv_kwargs.nfolds, tmp_cv_kwargs.nreplicates)
+    SparseSVM.repeated_cv(algorithm, problem, tmp_grids;
         scoref=SparseSVM.prediction_accuracies,
         tmp_fit_kwargs...,
         tmp_cv_kwargs...,
@@ -83,8 +84,8 @@ function run_experiment(paths, dataset, svm_type, algorithm, grids, kwargs, need
         x = cv_scores.time
         is, js, ks, rs = axes(x)
         for r in rs, k in ks, j in js, i in is
-            cv_data = (alg_str, r, k, lambda_grid[j], sparsity_grid[i],
-                cv_extras.nnz[i,j,k,r],
+            nvars = SparseSVM.sparsity_to_k(problem, sparsity_grid[i])
+            cv_data = (alg_str, r, k, lambda_grid[j], sparsity_grid[i], nvars,
                 cv_extras.iters[i,j,k,r],
                 cv_extras.risk[i,j,k,r],
                 cv_extras.loss[i,j,k,r],
@@ -96,6 +97,9 @@ function run_experiment(paths, dataset, svm_type, algorithm, grids, kwargs, need
                 cv_scores.train[i,j,k,r],
                 cv_scores.validation[i,j,k,r],
                 cv_scores.test[i,j,k,r],
+                cv_extras.nnz[i,j,k,r],
+                cv_extras.anz[i,j,k,r],
+                cv_extras.nsv[i,j,k,r],
             )
             write(io, join(cv_data, ','), "\n")
         end
@@ -159,18 +163,29 @@ function run_experiment(paths, dataset, svm_type, algorithm, grids, kwargs, need
 
     @info "Full SVM results" train_accuracy=train_accuracyC test_accuracy=test_accuracyC iterations=itersC statsC...
 
-    open(compare_fname, "a") do io
-        nnz = count(!isequal(0), last(SparseSVM.get_params_proj(problemA)))
-        nsv = SparseSVM.support_vectors(problemA) |> length
-        rowA = (alg_str, "sparse", lambda_opt, sparsity_opt, nnz, train_accuracyA, test_accuracyA, itersA, statsA..., nsv)
-        
-        nnz = count(!isequal(0), last(SparseSVM.get_params_proj(problemB)))
-        nsv = SparseSVM.support_vectors(problemB) |> length
-        rowB = (alg_str, "reduced", lambda_opt, sparsity_opt, nnz, train_accuracyB, test_accuracyB, itersB, statsB..., nsv)
+    nvars = SparseSVM.sparsity_to_k(problemA, sparsity_opt)
 
-        nnz = count(!isequal(0), last(SparseSVM.get_params_proj(problemC)))
+    open(compare_fname, "a") do io
+        # sparse
+        nvars = SparseSVM.sparsity_to_k(problemA, sparsity_opt)
+        nnz = SparseSVM.active_variables(problemA) |> length
+        anz = map(length, SparseSVM.active_variable_subsets(problemA)) |> mean
+        nsv = SparseSVM.support_vectors(problemA) |> length
+        rowA = (alg_str, "sparse", lambda_opt, sparsity_opt, nvars, train_accuracyA, test_accuracyA, itersA, statsA..., nnz, anz, nsv)
+        
+        # reduced
+        nvars = SparseSVM.sparsity_to_k(problemA, sparsity_opt) # same as A
+        nnz = SparseSVM.active_variables(problemB) |> length
+        anz = map(length, SparseSVM.active_variable_subsets(problemB)) |> mean
+        nsv = SparseSVM.support_vectors(problemB) |> length
+        rowB = (alg_str, "reduced", lambda_opt, sparsity_opt, nvars, train_accuracyB, test_accuracyB, itersB, statsB..., nnz, anz, nsv)
+
+        # full model
+        nvars = SparseSVM.sparsity_to_k(problemA, 0.0)
+        nnz = SparseSVM.active_variables(problemC) |> length
+        anz = map(length, SparseSVM.active_variable_subsets(problemC)) |> mean
         nsv = SparseSVM.support_vectors(problemC) |> length
-        rowC = (alg_str, "full", lambda_opt, zero(sparsity_opt), nnz, train_accuracyC, test_accuracyC, itersC, statsC..., nsv)
+        rowC = (alg_str, "full", lambda_opt, zero(sparsity_opt), nvars, train_accuracyC, test_accuracyC, itersC, statsC..., nnz, anz, nsv)
         
         write(io, join(rowA, ','), "\n")
         write(io, join(rowB, ','), "\n")
@@ -232,7 +247,7 @@ for example in examples
     end
 
     # run
-    for algorithm in (MMSVD(), SD())
+    for algorithm in (MMSVD(), SD(),)
         alg_str = string("alg=", string(typeof(algorithm)))
         settings_fname = joinpath(full_dir, "cv-"*alg_str*".settings")
         paths = (settings_fname, results_fname, compare_fname)
