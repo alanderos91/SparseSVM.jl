@@ -198,53 +198,42 @@ end
         @test length(prob.svm) == c
     end
 end
-# @testset "Projection" begin
-#     n = 100
-#     x = zeros(n)
-#     idx = collect(1:n)
-#     idx_buffer = similar(idx)
+
+@testset "Projection" begin
+    n = 100
+    x = zeros(n)
+    idx = collect(1:n)
+    idx_buffer = similar(idx)
     
-#     # case: more nonzeros than k
-#     k = 10
-#     for i in eachindex(x)
-#         x[i] = rand() > 0.5 ? -i : i
-#     end
-#     shuffle!(x)
-#     perm = sortperm(x, rev=true, by=abs)
-#     xproj = project_sparsity_set!(copy(x), idx, k, idx_buffer)
-#     @test all(i -> xproj[perm[i]] == x[perm[i]], 1:k)
-#     @test all(i -> xproj[perm[i]] == 0, k+1:n)
+    # case: more nonzeros than k
+    k = 10
+    for i in eachindex(x)
+        x[i] = rand() > 0.5 ? -i : i
+    end
+    shuffle!(x)
+    perm = sortperm(x, rev=true, by=abs)
+    xproj = SVM.project_l0_ball!(copy(x), idx, k, idx_buffer)
+    @test all(i -> xproj[perm[i]] == x[perm[i]], 1:k)
+    @test all(i -> xproj[perm[i]] == 0, k+1:n)
     
-#     # case: less nonzeros than k; no change
-#     c = round(Int, 0.5*k)
-#     fill!(x, 0)
-#     for i in 1:c
-#         x[i] = rand() > 0.5 ? -i : i
-#     end
-#     shuffle!(x)
-#     perm = sortperm(x, rev=true, by=abs)
-#     xproj = project_sparsity_set!(copy(x), idx, k, idx_buffer)
-#     @test all(i -> xproj[i] == x[i], 1:n)
+    # case: less nonzeros than k; no change
+    c = round(Int, 0.5*k)
+    fill!(x, 0)
+    for i in 1:c
+        x[i] = rand() > 0.5 ? -i : i
+    end
+    shuffle!(x)
+    perm = sortperm(x, rev=true, by=abs)
+    xproj = SVM.project_l0_ball!(copy(x), idx, k, idx_buffer)
+    @test all(i -> xproj[i] == x[i], 1:n)
     
-#     # case: exactly k nonzeros
-#     fill!(x, 0)
-#     for i in 1:k
-#         x[i] = rand() > 0.5 ? -i : i
-#     end
-#     shuffle!(x)
-#     perm = sortperm(x, rev=true, by=abs)
-#     xproj = project_sparsity_set!(copy(x), idx, k, idx_buffer)
-#     @test all(i -> xproj[i] == x[i], 1:n)
-    
-#     # helper function should give length n vector without intercept
-#     p = randn(n)
-#     pvec, idx = SparseSVM.get_model_coefficients(p, false)
-#     @test length(pvec) == n
-#     @test all(i -> p[i] == pvec[i], 1:length(pvec))
-    
-#     # helper function should give view into p with intercept
-#     p = randn(n)
-#     pvec, idx = SparseSVM.get_model_coefficients(p, true)
-#     @test length(pvec) == n-1
-#     @test all(i -> p[i] == pvec[i], 1:length(pvec))
-# end
+    # case: exactly k nonzeros
+    fill!(x, 0)
+    for i in 1:k
+        x[i] = rand() > 0.5 ? -i : i
+    end
+    shuffle!(x)
+    perm = sortperm(x, rev=true, by=abs)
+    xproj = SVM.project_l0_ball!(copy(x), idx, k, idx_buffer)
+    @test all(i -> xproj[i] == x[i], 1:n)
+end
